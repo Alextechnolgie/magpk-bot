@@ -10,6 +10,7 @@ from aiogram.client.default import DefaultBotProperties
 from handlers import router
 
 load_dotenv()
+# Сначала пробуем взять из окружения (для Railway), если нет — из .env
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 
 logging.basicConfig(
@@ -21,11 +22,12 @@ logger = logging.getLogger(__name__)
 
 
 async def main():
-    if not BOT_TOKEN:
-        raise ValueError("BOT_TOKEN не найден! Проверь файл .env")
+    token = os.environ.get("BOT_TOKEN") or BOT_TOKEN
+    if not token or token == "ВСТАВЬ_ТОКЕН_СЮДА":
+        raise ValueError("BOT_TOKEN не найден! Добавь его в переменные на Railway или в файл .env")
 
     bot = Bot(
-        token=BOT_TOKEN,
+        token=token,
         default=DefaultBotProperties(parse_mode=ParseMode.MARKDOWN),
     )
     dp = Dispatcher()
