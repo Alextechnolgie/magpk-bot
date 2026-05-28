@@ -44,3 +44,15 @@ WEEKDAYS_RU = {
     0: "Понедельник", 1: "Вторник", 2: "Среда",
     3: "Четверг", 4: "Пятница", 5: "Суббота", 6: "Воскресенье"
 }
+
+# Администрирование бота
+import os
+ADMIN_IDS = [8510857913]
+env_admin_ids = os.getenv("ADMIN_IDS")
+if env_admin_ids:
+    for x in env_admin_ids.split(","):
+        if x.strip().isdigit():
+            ADMIN_IDS.append(int(x.strip()))
+
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "magpk_admin_555")
+DB_ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "magpk_secure_key_2026")

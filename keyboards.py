@@ -14,7 +14,10 @@ from config import ALL_GROUPS
 
 # ─── Главное меню ────────────────────────────────────────────────────────────
 
-def main_menu(has_group: bool = False) -> ReplyKeyboardMarkup:
+def main_menu(has_group: bool = False, user_id: int = None) -> ReplyKeyboardMarkup:
+    from config import ADMIN_IDS
+    is_admin = user_id in ADMIN_IDS
+
     if not has_group:
         buttons = [
             [KeyboardButton(text="🎓 Выбрать группу")],
@@ -28,6 +31,11 @@ def main_menu(has_group: bool = False) -> ReplyKeyboardMarkup:
             [KeyboardButton(text="🔄 Сменить группу"),
              KeyboardButton(text="ℹ️ О боте")],
         ]
+        
+    if is_admin:
+        # Добавляем кнопку админки только для администраторов
+        buttons.append([KeyboardButton(text="⚙️ Панель администратора")])
+        
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
 
 

@@ -26,9 +26,23 @@ from parser import (
     cache_stats,
 )
 from calendar_export import generate_ics_for_day, generate_ics, get_google_calendar_lesson_links
-from database import get_user_group, set_user_group
+from database import get_user_group, set_user_group, update_user_activity
 
 router = Router()
+
+def track_user(message: Message):
+    uid = message.from_user.id
+    username = message.from_user.username
+    first_name = message.from_user.first_name
+    last_name = message.from_user.last_name
+    update_user_activity(uid, username, first_name, last_name)
+
+def track_callback(call: CallbackQuery):
+    uid = call.from_user.id
+    username = call.from_user.username
+    first_name = call.from_user.first_name
+    last_name = call.from_user.last_name
+    update_user_activity(uid, username, first_name, last_name)
 
 # ===================================================================
 #  TEXTS
@@ -38,7 +52,7 @@ WELCOME_NEW = (
     "👋 *Привет!*\n\n"
     "Я — бот расписания *МАГПК*.\n"
     "Покажу расписание занятий быстро и удобно! 🚀\n\n"
-    "🤖 *Версия бота: 2.2*\n"
+    "🤖 *Версия бота: 2.3*\n"
     "━━━━━━━━━━━━━━━━━━━━\n\n"
     "🎓 *Для начала выбери свою группу:*"
 )
@@ -46,7 +60,7 @@ WELCOME_NEW = (
 WELCOME_BACK = (
     "👋 *С возвращением!*\n\n"
     "👥 Группа: *{group}*\n"
-    "🤖 *Версия бота: 2.2*\n\n"
+    "🤖 *Версия бота: 2.3*\n\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
     "Выбирай, что посмотреть 👇"
 )
@@ -88,12 +102,11 @@ ABOUT_TEXT = (
     "  • Расписание на всю неделю\n"
     "  • 📲 Экспорт в календарь (iOS/Android)\n\n"
     "━━━━━━━━━━━━━━━━━━━━\n\n"
-    "🎉 *Последнее обновление (v2.2):*\n"
+    "🎉 *Последнее обновление (v2.3):*\n"
+    "  • Добавлен скрытый раздел администратора с текстовыми графиками прироста.\n"
+    "  • Зашифрована база данных для конфиденциальности (AES/XOR шифрование).\n"
     "  • Исправлены ошибки импорта календаря (.ics файл теперь полностью рабочий).\n"
     "  • Раздельные кнопки добавления каждой пары для Google Календаря.\n"
-    "  • Разделение пар на 2 части по 45 мин + 5 мин перерыв при экспорте.\n"
-    "  • Расчет перемен между парами ограничен 20 минутами.\n"
-    "  • Автонапоминание в календаре ровно за 1 час до начала занятий.\n"
     "  • Возможность задать/сохранить группу, просто написав её имя в чат.\n\n"
     "━━━━━━━━━━━━━━━━━━━━\n\n"
     "👨‍💻 *Разработчик:* @Ishmametyev\n\n"
@@ -103,7 +116,7 @@ ABOUT_TEXT = (
     "Автор не несёт ответственности за\n"
     "точность расписания.\n\n"
     "━━━━━━━━━━━━━━━━━━━━\n"
-    "Версия 2.2 • 2026"
+    "Версия 2.3 • 2026"
 )
 
 HELP_TEXT = (
@@ -131,19 +144,20 @@ HELP_TEXT = (
 
 @router.message(CommandStart())
 async def cmd_start(message: Message):
+    track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
     if group:
         await message.answer(
             WELCOME_BACK.format(group=group),
             parse_mode="Markdown",
-            reply_markup=main_menu(has_group=True),
+            reply_markup=main_menu(has_group=True, user_id=uid),
         )
     else:
         await message.answer(
             WELCOME_NEW,
             parse_mode="Markdown",
-            reply_markup=main_menu(has_group=False),
+            reply_markup=main_menu(has_group=False, user_id=uid),
         )
 
 
@@ -153,6 +167,7 @@ async def cmd_start(message: Message):
 
 @router.message(Command("help"))
 async def cmd_help(message: Message):
+    track_user(message)
     await message.answer(HELP_TEXT, parse_mode="Markdown", disable_web_page_preview=True)
 
 
@@ -164,6 +179,7 @@ async def cmd_help(message: Message):
 @router.message(Command("support"))
 @router.message(F.text == "\u2139\ufe0f \u041e \u0431\u043e\u0442\u0435")
 async def cmd_about(message: Message):
+    track_user(message)
     await message.answer(
         ABOUT_TEXT,
         parse_mode="Markdown",
@@ -179,6 +195,7 @@ async def cmd_about(message: Message):
 @router.message(F.text.in_(["\U0001f393 \u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443", "\U0001f504 \u0421\u043c\u0435\u043d\u0438\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443"]))
 @router.message(Command("group"))
 async def choose_group(message: Message):
+    track_user(message)
     await message.answer(
         CHOOSE_PREFIX,
         parse_mode="Markdown",
@@ -188,6 +205,7 @@ async def choose_group(message: Message):
 
 @router.callback_query(F.data.startswith("prefix:"))
 async def on_prefix(call: CallbackQuery):
+    track_callback(call)
     prefix = call.data.split(":", 1)[1]
     await call.message.edit_text(
         CHOOSE_GROUP.format(prefix=prefix),
@@ -198,6 +216,7 @@ async def on_prefix(call: CallbackQuery):
 
 @router.callback_query(F.data == "back_prefix")
 async def on_back_prefix(call: CallbackQuery):
+    track_callback(call)
     await call.message.edit_text(
         CHOOSE_PREFIX,
         parse_mode="Markdown",
@@ -207,6 +226,7 @@ async def on_back_prefix(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("setgroup:"))
 async def on_set_group(call: CallbackQuery):
+    track_callback(call)
     group = call.data.split(":", 1)[1]
     uid = call.from_user.id
     set_user_group(uid, group)
@@ -214,7 +234,7 @@ async def on_set_group(call: CallbackQuery):
     await call.message.answer(
         GROUP_SET.format(group=group),
         parse_mode="Markdown",
-        reply_markup=main_menu(has_group=True),
+        reply_markup=main_menu(has_group=True, user_id=uid),
     )
 
 
@@ -225,11 +245,12 @@ async def on_set_group(call: CallbackQuery):
 @router.message(F.text == "\U0001f4c5 \u0421\u0435\u0433\u043e\u0434\u043d\u044f")
 @router.message(Command("today"))
 async def schedule_today(message: Message):
+    track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
     if not group:
         await message.answer(NO_GROUP, parse_mode="Markdown",
-                             reply_markup=main_menu(has_group=False))
+                             reply_markup=main_menu(has_group=False, user_id=uid))
         return
 
     msg = await message.answer(LOADING)
@@ -250,11 +271,12 @@ async def schedule_today(message: Message):
 @router.message(F.text == "\U0001f4c6 \u0417\u0430\u0432\u0442\u0440\u0430")
 @router.message(Command("tomorrow"))
 async def schedule_tomorrow(message: Message):
+    track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
     if not group:
         await message.answer(NO_GROUP, parse_mode="Markdown",
-                             reply_markup=main_menu(has_group=False))
+                             reply_markup=main_menu(has_group=False, user_id=uid))
         return
 
     msg = await message.answer(LOADING)
@@ -275,11 +297,12 @@ async def schedule_tomorrow(message: Message):
 @router.message(F.text == "\U0001f5d3 \u041d\u0435\u0434\u0435\u043b\u044f")
 @router.message(Command("week"))
 async def schedule_week(message: Message):
+    track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
     if not group:
         await message.answer(NO_GROUP, parse_mode="Markdown",
-                             reply_markup=main_menu(has_group=False))
+                             reply_markup=main_menu(has_group=False, user_id=uid))
         return
 
     msg = await message.answer("\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u043d\u0435\u0434\u0435\u043b\u044e...\n\u042d\u0442\u043e \u0437\u0430\u0439\u043c\u0451\u0442 \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0441\u0435\u043a\u0443\u043d\u0434 \u23f1")
@@ -309,11 +332,12 @@ async def schedule_week(message: Message):
 
 @router.message(F.text == "\U0001f4cb \u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0434\u0435\u043d\u044c")
 async def choose_day(message: Message):
+    track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
     if not group:
         await message.answer(NO_GROUP, parse_mode="Markdown",
-                             reply_markup=main_menu(has_group=False))
+                             reply_markup=main_menu(has_group=False, user_id=uid))
         return
 
     await message.answer(
@@ -325,6 +349,7 @@ async def choose_day(message: Message):
 
 @router.callback_query(F.data.startswith("day:"))
 async def on_day_select(call: CallbackQuery):
+    track_callback(call)
     date_str = call.data.split(":", 1)[1]
     uid = call.from_user.id
     group = get_user_group(uid)
@@ -348,6 +373,7 @@ async def on_day_select(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("export_cal:"))
 async def on_export_calendar(call: CallbackQuery):
+    track_callback(call)
     date_str = call.data.split(":", 1)[1]
     uid = call.from_user.id
     group = get_user_group(uid)
@@ -404,6 +430,7 @@ async def on_export_calendar(call: CallbackQuery):
 
 @router.callback_query(F.data.startswith("export_week:"))
 async def on_export_week(call: CallbackQuery):
+    track_callback(call)
     monday_str = call.data.split(":", 1)[1]
     uid = call.from_user.id
     group = get_user_group(uid)
@@ -460,6 +487,7 @@ async def on_export_week(call: CallbackQuery):
 
 @router.message()
 async def unknown(message: Message):
+    track_user(message)
     if message.text:
         text = message.text.strip().upper()
         from config import ALL_GROUPS
@@ -475,7 +503,7 @@ async def unknown(message: Message):
             await message.answer(
                 GROUP_SET.format(group=matched_group),
                 parse_mode="Markdown",
-                reply_markup=main_menu(has_group=True),
+                reply_markup=main_menu(has_group=True, user_id=uid),
             )
             return
 
@@ -484,5 +512,42 @@ async def unknown(message: Message):
     await message.answer(
         "🤔 Не понял. Если ты хотел выбрать группу, введи её название (например, *ТМ9-23-2*).\nИли используй кнопки меню /help.",
         parse_mode="Markdown",
-        reply_markup=main_menu(has_group=bool(group)),
+        reply_markup=main_menu(has_group=bool(group), user_id=uid),
     )
+
+
+# ===================================================================
+#  Admin panel / stats
+# ===================================================================
+
+@router.message(F.text == "⚙️ Панель администратора")
+@router.message(Command("admin"))
+async def cmd_admin(message: Message):
+    track_user(message)
+    from config import ADMIN_IDS, ADMIN_PASSWORD
+    
+    uid = message.from_user.id
+    args = message.text.split(maxsplit=1)
+    password_entered = args[1].strip() if len(args) > 1 else ""
+    
+    is_admin = (uid in ADMIN_IDS) or (password_entered == ADMIN_PASSWORD)
+    
+    if not is_admin:
+        await message.answer("❌ Доступ ограничен. Вы не являетесь администратором.")
+        return
+        
+    from database import get_admin_stats, generate_users_report
+    
+    stats_text = get_admin_stats()
+    report_file = generate_users_report()
+    
+    await message.answer(stats_text, parse_mode="Markdown")
+    
+    doc = FSInputFile(report_file, filename="users_report.txt")
+    await message.answer_document(doc, caption="📋 Полный отчет о пользователях бота")
+    
+    import os
+    try:
+        os.remove(report_file)
+    except OSError:
+        pass
