@@ -39,78 +39,82 @@ def _load() -> dict:
                 if content.startswith("{"):
                     try:
                         data = json.loads(content)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"Error loading JSON (plain): {e}")
                 else:
                     try:
                         decrypted = _xor_decipher(content, DB_ENCRYPTION_KEY)
                         data = json.loads(decrypted)
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"Error loading JSON (encrypted): {e}")
                         
-    # Если база пустая или в ней нет старых пользователей, то автоматически восстанавливаем их из резервной копии
-    if not data or "787372049" not in data:
-        old_users = {
-            "8510857913": {
-                "group": "ТМ9-23-2",
-                "joined_at": "2026-05-28 17:37:49",
-                "last_seen": "2026-05-28 17:54:21",
-                "username": "Ishmametyev",
-                "first_name": "Алексей",
-                "last_name": "Ишмаметьев"
-            },
-            "787372049": {
-                "group": "ТМ9-23-2",
-                "joined_at": "2026-05-28 17:40:04",
-                "last_seen": "2026-05-28 17:40:31",
-                "username": "tsukimanu",
-                "first_name": "Костя",
-                "last_name": ""
-            },
-            "1478043047": {
-                "group": "ТМ9-23-2",
-                "joined_at": "2026-05-28 17:41:14",
-                "last_seen": "2026-05-28 17:41:36",
-                "username": "kiprro",
-                "first_name": "URAL",
-                "last_name": ""
-            },
-            "1003834844": {
-                "group": "ТМ9-23-2",
-                "joined_at": "2026-05-28 17:47:48",
-                "last_seen": "2026-05-28 17:48:52",
-                "username": "Stranadozdei",
-                "first_name": "Noize",
-                "last_name": ""
-            },
-            "1054079756": {
-                "group": "ТМ9-23-2",
-                "joined_at": "2026-05-28 17:48:11",
-                "last_seen": "2026-05-28 17:48:27",
-                "username": "MrNoMor",
-                "first_name": "Mr.NoMore",
-                "last_name": ""
-            },
-            "5011839347": {
-                "group": "ТМ9-23-2",
-                "joined_at": "2026-05-28 17:53:02",
-                "last_seen": "2026-05-28 17:53:24",
-                "username": "Sudar73i",
-                "first_name": "Sudar'",
-                "last_name": ""
-            },
-            "5168364362": {
-                "group": "МС-25",
-                "joined_at": "2026-05-28 17:53:57",
-                "last_seen": "2026-05-28 17:54:08",
-                "username": "UwU_loveeeeee",
-                "first_name": "Лерч",
-                "last_name": ""
-            }
+    # Если в базе нет ключевых старых пользователей, добавляем их (НЕ затирая новых)
+    old_users = {
+        "8510857913": {
+            "group": "ТМ9-23-2",
+            "joined_at": "2026-05-28 17:37:49",
+            "last_seen": "2026-05-28 17:54:21",
+            "username": "Ishmametyev",
+            "first_name": "Алексей",
+            "last_name": "Ишмаметьев"
+        },
+        "787372049": {
+            "group": "ТМ9-23-2",
+            "joined_at": "2026-05-28 17:40:04",
+            "last_seen": "2026-05-28 17:40:31",
+            "username": "tsukimanu",
+            "first_name": "Костя",
+            "last_name": ""
+        },
+        "1478043047": {
+            "group": "ТМ9-23-2",
+            "joined_at": "2026-05-28 17:41:14",
+            "last_seen": "2026-05-28 17:41:36",
+            "username": "kiprro",
+            "first_name": "URAL",
+            "last_name": ""
+        },
+        "1003834844": {
+            "group": "ТМ9-23-2",
+            "joined_at": "2026-05-28 17:47:48",
+            "last_seen": "2026-05-28 17:48:52",
+            "username": "Stranadozdei",
+            "first_name": "Noize",
+            "last_name": ""
+        },
+        "1054079756": {
+            "group": "ТМ9-23-2",
+            "joined_at": "2026-05-28 17:48:11",
+            "last_seen": "2026-05-28 17:48:27",
+            "username": "MrNoMor",
+            "first_name": "Mr.NoMore",
+            "last_name": ""
+        },
+        "5011839347": {
+            "group": "ТМ9-23-2",
+            "joined_at": "2026-05-28 17:53:02",
+            "last_seen": "2026-05-28 17:53:24",
+            "username": "Sudar73i",
+            "first_name": "Sudar'",
+            "last_name": ""
+        },
+        "5168364362": {
+            "group": "МС-25",
+            "joined_at": "2026-05-28 17:53:57",
+            "last_seen": "2026-05-28 17:54:08",
+            "username": "UwU_loveeeeee",
+            "first_name": "Лерч",
+            "last_name": ""
         }
-        for uid, info in old_users.items():
-            if uid not in data:
-                data[uid] = info
+    }
+    
+    modified = False
+    for uid, info in old_users.items():
+        if uid not in data:
+            data[uid] = info
+            modified = True
+            
+    if modified:
         _save(data)
         
     return data
