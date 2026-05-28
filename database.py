@@ -80,6 +80,39 @@ def get_user_group(user_id: int) -> str | None:
     return info  # string or None
 
 
+def _sync_user_to_google(user_id: int, info: dict):
+    """Отправляет данные пользователя в Google Таблицу в фоновом режиме."""
+    from config import GOOGLE_SHEET_URL
+    if not GOOGLE_SHEET_URL:
+        return
+        
+    import asyncio
+    import aiohttp
+    
+    async def task():
+        payload = {
+            "user_id": str(user_id),
+            "group": info.get("group"),
+            "username": info.get("username"),
+            "first_name": info.get("first_name"),
+            "last_name": info.get("last_name"),
+            "joined_at": info.get("joined_at"),
+            "last_seen": info.get("last_seen")
+        }
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.post(GOOGLE_SHEET_URL, json=payload, timeout=10) as resp:
+                    await resp.read()
+        except Exception:
+            pass
+            
+    try:
+        loop = asyncio.get_running_loop()
+        loop.create_task(task())
+    except RuntimeError:
+        pass
+
+
 def set_user_group(user_id: int, group: str):
     """Сохраняет группу пользователя в кэш и записывает на диск."""
     cache = _get_cache()
@@ -101,6 +134,7 @@ def set_user_group(user_id: int, group: str):
         }
     cache[uid_str] = info
     _save(cache)
+    _sync_user_to_google(user_id, info)
 
 
 def update_user_activity(user_id: int, username: str | None, first_name: str | None, last_name: str | None) -> bool:
@@ -141,6 +175,7 @@ def update_user_activity(user_id: int, username: str | None, first_name: str | N
         
     cache[uid_str] = info
     _save(cache)
+    _sync_user_to_google(user_id, info)
     return is_new
 
 

@@ -57,3 +57,4 @@ if env_admin_ids:
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12344321")
 DB_ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "magpk_secure_key_2026")
 DONATE_LINK = os.getenv("DONATE_LINK", "https://www.tbank.ru/cf/2ljNourHecO")
+GOOGLE_SHEET_URL = os.getenv("GOOGLE_SHEET_URL", "")
