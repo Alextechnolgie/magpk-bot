@@ -221,6 +221,7 @@ END:VEVENT"""
 
     # Собираем .ics файл
     label = f"Расписание {group}"
+    events_str = "\n".join(all_events)
     cal = f"""BEGIN:VCALENDAR
 VERSION:2.0
 PRODID:-//MAGPK Bot//Schedule//RU
@@ -237,7 +238,7 @@ TZOFFSETTO:+0500
 TZNAME:+05
 END:STANDARD
 END:VTIMEZONE
-{"\n".join(all_events)}
+{events_str}
 END:VCALENDAR"""
 
     # Записываем во временный файл
