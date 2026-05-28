@@ -9,7 +9,7 @@ def _get_mgn_now() -> datetime:
     tz = timezone(timedelta(hours=5))
     return datetime.now(tz).replace(tzinfo=None)
 
-DB_FILE = "users.json"
+DB_FILE = "/data/users.json" if os.path.isdir("/data") else "users.json"
 
 # Внутрипамятый кэш для исключения постоянного чтения с диска
 _users_cache = None
