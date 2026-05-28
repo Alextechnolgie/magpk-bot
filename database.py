@@ -2,6 +2,7 @@ import json
 import os
 import tempfile
 import base64
+import shutil
 from datetime import datetime, timedelta, timezone
 
 def _get_mgn_now() -> datetime:
@@ -9,7 +10,11 @@ def _get_mgn_now() -> datetime:
     tz = timezone(timedelta(hours=5))
     return datetime.now(tz).replace(tzinfo=None)
 
-DB_FILE = "/data/users.json" if os.path.isdir("/data") else "users.json"
+# Если папка /data существует (например, в Docker или Railway Volume), используем её.
+# Иначе используем текущую директорию.
+DB_DIR = "/data" if os.path.isdir("/data") else "."
+DB_FILE = os.path.join(DB_DIR, "users.json")
+BACKUP_FILE = DB_FILE + ".bak"
 
 # Внутрипамятый кэш для исключения постоянного чтения с диска
 _users_cache = None
@@ -29,24 +34,42 @@ def _xor_decipher(encoded_str: str, key: str) -> str:
     return data_bytes.decode("utf-8")
 
 
-def _load() -> dict:
-    data = {}
-    if os.path.exists(DB_FILE):
-        from config import DB_ENCRYPTION_KEY
-        with open(DB_FILE, "r", encoding="utf-8") as f:
+def _load_from_file(path: str) -> dict | None:
+    """Загружает и дешифрует данные из конкретного файла."""
+    if not os.path.exists(path):
+        return None
+    
+    from config import DB_ENCRYPTION_KEY
+    try:
+        with open(path, "r", encoding="utf-8") as f:
             content = f.read().strip()
-            if content:
-                if content.startswith("{"):
-                    try:
-                        data = json.loads(content)
-                    except Exception as e:
-                        print(f"Error loading JSON (plain): {e}")
-                else:
-                    try:
-                        decrypted = _xor_decipher(content, DB_ENCRYPTION_KEY)
-                        data = json.loads(decrypted)
-                    except Exception as e:
-                        print(f"Error loading JSON (encrypted): {e}")
+            if not content:
+                return None
+                
+            if content.startswith("{"):
+                return json.loads(content)
+            else:
+                decrypted = _xor_decipher(content, DB_ENCRYPTION_KEY)
+                return json.loads(decrypted)
+    except Exception as e:
+        print(f"⚠️ Ошибка при чтении {path}: {e}")
+        return None
+
+
+def _load() -> dict:
+    # 1. Пытаемся загрузить основной файл
+    data = _load_from_file(DB_FILE)
+    
+    # 2. Если основной файл битый или пустой, пробуем бэкап
+    if data is None and os.path.exists(BACKUP_FILE):
+        print(f"🔄 Попытка восстановления из бэкапа: {BACKUP_FILE}")
+        data = _load_from_file(BACKUP_FILE)
+        if data:
+            print("✅ Данные восстановлены из бэкапа!")
+            _save(data) # Сохраняем восстановленное как основное
+            
+    if data is None:
+        data = {}
                         
     # Если в базе нет ключевых старых пользователей, добавляем их (НЕ затирая новых)
     old_users = {
@@ -121,12 +144,34 @@ def _load() -> dict:
 
 
 def _save(data: dict):
+    """Атомарно сохраняет данные на диск с созданием бэкапа."""
     from config import DB_ENCRYPTION_KEY
     data_str = json.dumps(data, ensure_ascii=False, indent=2)
     encrypted = _xor_cipher(data_str, DB_ENCRYPTION_KEY)
     
-    with open(DB_FILE, "w", encoding="utf-8") as f:
-        f.write(encrypted)
+    # 1. Создаем бэкап текущего рабочего файла перед обновлением
+    if os.path.exists(DB_FILE):
+        try:
+            shutil.copy2(DB_FILE, BACKUP_FILE)
+        except Exception:
+            pass
+
+    # 2. Атомарная запись через временный файл (предотвращает пустой файл при сбое)
+    dir_name = os.path.dirname(DB_FILE)
+    temp_fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix="db_tmp_")
+    try:
+        with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
+            f.write(encrypted)
+        
+        # В Windows os.rename не может перезаписывать существующий файл
+        if os.name == 'nt' and os.path.exists(DB_FILE):
+            os.remove(DB_FILE)
+            
+        os.rename(temp_path, DB_FILE)
+    except Exception as e:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        print(f"❌ Критическая ошибка при сохранении базы: {e}")
 
 
 def _get_cache() -> dict:
