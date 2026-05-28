@@ -114,6 +114,11 @@ SUMMARY:{_escape_ics(subject)}
 DESCRIPTION:{description}
 LOCATION:{_escape_ics(location)}
 BEGIN:VALARM
+TRIGGER:-PT60M
+ACTION:DISPLAY
+DESCRIPTION:Через 1 час: {_escape_ics(subject)}
+END:VALARM
+BEGIN:VALARM
 TRIGGER:-PT15M
 ACTION:DISPLAY
 DESCRIPTION:Через 15 минут: {_escape_ics(subject)}
