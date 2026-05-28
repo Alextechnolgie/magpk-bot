@@ -128,6 +128,22 @@ def _load() -> dict:
             "username": "UwU_loveeeeee",
             "first_name": "Лерч",
             "last_name": ""
+        },
+        "6534886874": {
+            "group": "ТМ9-23-2",
+            "joined_at": "2026-05-29 00:38:08",
+            "last_seen": "2026-05-29 00:38:47",
+            "username": "Sm0k1ti",
+            "first_name": "Sm0k1ti\"",
+            "last_name": ""
+        },
+        "1527703119": {
+            "group": None,
+            "joined_at": "2026-05-29 00:57:09",
+            "last_seen": "2026-05-29 00:57:15",
+            "username": "kaynex",
+            "first_name": "𝚔𝚊𝚢𝚗𝚎𝚡",
+            "last_name": ""
         }
     }
     
