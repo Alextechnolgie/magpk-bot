@@ -279,24 +279,18 @@ async def schedule_week(message: Message):
     days_texts = await fetch_week_schedule(group, monday)
 
     await msg.delete()
-    for i, text in enumerate(days_texts):
-        day_offset = i
-        day = monday + timedelta(days=day_offset)
-        while day.weekday() == 6:
-            day_offset += 1
-            day = monday + timedelta(days=day_offset)
-        
-        # Для последнего дня недели добавляем кнопку экспорта всей недели
-        markup = calendar_keyboard(day.isoformat())
-        if i == len(days_texts) - 1:
-            # Можно было бы объединить, но лучше прислать отдельным сообщением или добавить в последнее
-            await message.answer(text, parse_mode="Markdown",
-                                 disable_web_page_preview=True,
-                                 reply_markup=week_calendar_keyboard(monday.isoformat()))
-        else:
-            await message.answer(text, parse_mode="Markdown",
-                                 disable_web_page_preview=True,
-                                 reply_markup=markup)
+    for text in days_texts:
+        await message.answer(text, parse_mode="Markdown",
+                             disable_web_page_preview=True)
+
+    # One button to add the ENTIRE week at once
+    await message.answer(
+        "\U0001f4c5 *\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c?*\n"
+        "\u041d\u0430\u0436\u043c\u0438 \u043a\u043d\u043e\u043f\u043a\u0443 \u2014 \u0432\u0441\u0435 \u043f\u0430\u0440\u044b \u043d\u0435\u0434\u0435\u043b\u0438 \u0434\u043e\u0431\u0430\u0432\u044f\u0442\u0441\u044f \u0441\u0440\u0430\u0437\u0443!",
+        parse_mode="Markdown",
+        reply_markup=week_calendar_keyboard(monday.isoformat()),
+    )
+
 
 
 # ===================================================================
@@ -331,9 +325,11 @@ async def on_day_select(call: CallbackQuery):
     await call.message.edit_text(LOADING)
     target_date = date.fromisoformat(date_str)
     text = await fetch_schedule(group, target_date)
+    lessons = await fetch_schedule_data(group, target_date)
+    g_url = get_google_calendar_day_link(group, target_date, lessons)
     await call.message.edit_text(text, parse_mode="Markdown",
                                  disable_web_page_preview=True,
-                                 reply_markup=calendar_keyboard(target_date.isoformat()))
+                                 reply_markup=calendar_keyboard(target_date.isoformat(), g_url))
 
 
 # ===================================================================

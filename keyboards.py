@@ -113,7 +113,7 @@ def week_calendar_keyboard(monday_iso: str) -> InlineKeyboardMarkup:
     """Inline-кнопки для экспорта расписания на всю неделю."""
     buttons = [
         [InlineKeyboardButton(
-            text="🗓 Добавить ВСЮ НЕДЕЛЮ (iPhone)",
+            text="📲 Добавить ВСЮ НЕДЕЛЮ в календарь",
             callback_data=f"export_week:{monday_iso}"
         )],
     ]
