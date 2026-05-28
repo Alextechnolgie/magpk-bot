@@ -9,6 +9,8 @@ from datetime import date, timedelta
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile
 from aiogram.filters import CommandStart, Command
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 from keyboards import (
     main_menu,
@@ -482,6 +484,84 @@ async def on_export_week(call: CallbackQuery):
 
 
 # ===================================================================
+#  Admin panel / FSM Authentication
+# ===================================================================
+
+class AdminStates(StatesGroup):
+    waiting_for_password = State()
+
+@router.message(Command("cancel"))
+@router.message(F.text.lower() == "отмена")
+async def cmd_cancel(message: Message, state: FSMContext):
+    track_user(message)
+    current_state = await state.get_state()
+    if current_state is None:
+        return
+    await state.clear()
+    uid = message.from_user.id
+    group = get_user_group(uid)
+    await message.answer(
+        "❌ Действие отменено.",
+        reply_markup=main_menu(has_group=bool(group), user_id=uid)
+    )
+
+@router.message(F.text == "⚙️ Панель администратора")
+@router.message(Command("admin"))
+async def cmd_admin(message: Message, state: FSMContext):
+    track_user(message)
+    from config import ADMIN_IDS
+    uid = message.from_user.id
+    
+    if uid not in ADMIN_IDS:
+        await message.answer("❌ Доступ ограничен.")
+        return
+
+    await state.set_state(AdminStates.waiting_for_password)
+    from aiogram.types import ReplyKeyboardRemove
+    await message.answer(
+        "🔑 Введите секретный пароль доступа (или отправьте *Отмена* для отмены):",
+        parse_mode="Markdown",
+        reply_markup=ReplyKeyboardRemove()
+    )
+
+@router.message(AdminStates.waiting_for_password)
+async def check_admin_password(message: Message, state: FSMContext):
+    track_user(message)
+    from config import ADMIN_PASSWORD
+    
+    password_entered = message.text.strip() if message.text else ""
+    
+    if password_entered == ADMIN_PASSWORD:
+        await state.clear()
+        
+        from database import get_admin_stats, generate_users_report
+        
+        stats_text = get_admin_stats()
+        report_file = generate_users_report()
+        
+        uid = message.from_user.id
+        group = get_user_group(uid)
+        
+        await message.answer(
+            stats_text, 
+            parse_mode="Markdown", 
+            reply_markup=main_menu(has_group=bool(group), user_id=uid)
+        )
+        
+        doc = FSInputFile(report_file, filename="users_report.txt")
+        await message.answer_document(doc, caption="📋 Полный отчет о пользователях бота")
+        
+        import os
+        try:
+            os.remove(report_file)
+        except OSError:
+            pass
+    else:
+        await message.answer(
+            "❌ Неверный пароль. Попробуйте еще раз или напишите *Отмена*:"
+        )
+
+# ===================================================================
 #  Unknown message
 # ===================================================================
 
@@ -514,45 +594,3 @@ async def unknown(message: Message):
         parse_mode="Markdown",
         reply_markup=main_menu(has_group=bool(group), user_id=uid),
     )
-
-
-# ===================================================================
-#  Admin panel / stats
-# ===================================================================
-
-@router.message(F.text == "⚙️ Панель администратора")
-@router.message(Command("admin"))
-async def cmd_admin(message: Message):
-    track_user(message)
-    from config import ADMIN_IDS, ADMIN_PASSWORD
-    
-    uid = message.from_user.id
-    args = message.text.split(maxsplit=1)
-    password_entered = args[1].strip() if len(args) > 1 else ""
-    
-    is_admin = (uid in ADMIN_IDS) or (password_entered == ADMIN_PASSWORD)
-    
-    if not is_admin:
-        await message.answer(
-            f"❌ Доступ ограничен. Ваш Telegram ID: `{uid}`.\n"
-            f"Для входа используйте команду с паролем: `/admin ВашПароль`\n"
-            f"или добавьте этот ID в список администраторов.",
-            parse_mode="Markdown"
-        )
-        return
-        
-    from database import get_admin_stats, generate_users_report
-    
-    stats_text = get_admin_stats()
-    report_file = generate_users_report()
-    
-    await message.answer(stats_text, parse_mode="Markdown")
-    
-    doc = FSInputFile(report_file, filename="users_report.txt")
-    await message.answer_document(doc, caption="📋 Полный отчет о пользователях бота")
-    
-    import os
-    try:
-        os.remove(report_file)
-    except OSError:
-        pass
