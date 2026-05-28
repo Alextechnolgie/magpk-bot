@@ -98,14 +98,16 @@ def set_user_group(user_id: int, group: str):
     _save(cache)
 
 
-def update_user_activity(user_id: int, username: str | None, first_name: str | None, last_name: str | None):
-    """Обновляет информацию об имени аккаунта и времени последней активности."""
+def update_user_activity(user_id: int, username: str | None, first_name: str | None, last_name: str | None) -> bool:
+    """Обновляет информацию об имени аккаунта и времени последней активности.
+    Возвращает True, если пользователь абсолютно новый (ранее отсутствовал в базе)."""
     cache = _get_cache()
     uid_str = str(user_id)
-    info = cache.get(uid_str)
+    is_new = uid_str not in cache
     
     now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
+    info = cache.get(uid_str)
     if isinstance(info, dict):
         if "joined_at" not in info:
             info["joined_at"] = now_str
@@ -134,6 +136,23 @@ def update_user_activity(user_id: int, username: str | None, first_name: str | N
         
     cache[uid_str] = info
     _save(cache)
+    return is_new
+
+
+def get_admin_settings() -> dict:
+    """Возвращает настройки администратора."""
+    cache = _get_cache()
+    settings = cache.get("__settings__")
+    if not isinstance(settings, dict):
+        settings = {"notify_new_users": True}
+    return settings
+
+
+def set_admin_settings(settings: dict):
+    """Сохраняет настройки администратора в базу."""
+    cache = _get_cache()
+    cache["__settings__"] = settings
+    _save(cache)
 
 
 def _parse_datetime(dt_str: str | None) -> datetime | None:
@@ -150,7 +169,7 @@ def _parse_datetime(dt_str: str | None) -> datetime | None:
 def get_admin_stats() -> str:
     """Генерирует сводную текстовую статистику с ASCII-графиками."""
     cache = _get_cache()
-    total_users = len(cache)
+    total_users = sum(1 for k in cache if k != "__settings__")
     
     now = datetime.now()
     today_start = datetime(now.year, now.month, now.day)
@@ -162,6 +181,8 @@ def get_admin_stats() -> str:
     month_count = 0
     
     for user_id, info in cache.items():
+        if user_id == "__settings__":
+            continue
         joined_str = None
         if isinstance(info, dict):
             joined_str = info.get("joined_at")
@@ -201,6 +222,7 @@ def get_admin_stats() -> str:
 def generate_users_report() -> str:
     """Генерирует красивый Excel-отчет о пользователях."""
     cache = _get_cache()
+    total_users = sum(1 for k in cache if k != "__settings__")
     
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -251,7 +273,7 @@ def generate_users_report() -> str:
     # Инфострока
     ws.merge_cells("A2:F2")
     info_cell = ws["A2"]
-    info_cell.value = f"Всего пользователей: {len(cache)}  |  Дата генерации: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+    info_cell.value = f"Всего пользователей: {total_users}  |  Дата генерации: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
     info_cell.font = Font(name="Calibri", size=11, italic=True)
     info_cell.alignment = align_left
     ws.row_dimensions[2].height = 20
@@ -269,6 +291,8 @@ def generate_users_report() -> str:
     # Данные (с 5 строки)
     row_num = 5
     for uid_str, info in cache.items():
+        if uid_str == "__settings__":
+            continue
         group = ""
         username = ""
         name = "Пользователь"

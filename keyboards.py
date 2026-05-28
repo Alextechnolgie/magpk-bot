@@ -147,3 +147,12 @@ def about_keyboard() -> InlineKeyboardMarkup:
         )],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def admin_panel_keyboard(notify_status: bool) -> InlineKeyboardMarkup:
+    """Клавиатура управления уведомлениями в панели администратора."""
+    label = "🔔 Уведомления о новых: ВКЛ" if notify_status else "🔕 Уведомления о новых: ВЫКЛ"
+    buttons = [
+        [InlineKeyboardButton(text=label, callback_data="toggle_notify")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)

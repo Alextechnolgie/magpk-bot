@@ -20,6 +20,7 @@ from keyboards import (
     calendar_keyboard,
     week_calendar_keyboard,
     about_keyboard,
+    admin_panel_keyboard,
 )
 from parser import (
     fetch_schedule,
@@ -27,24 +28,50 @@ from parser import (
     fetch_week_schedule,
     cache_stats,
 )
+import asyncio
 from calendar_export import generate_ics_for_day, generate_ics, get_google_calendar_lesson_links
 from database import get_user_group, set_user_group, update_user_activity
 
 router = Router()
+
+async def notify_admins_about_new_user(bot, user_id: int, username: str | None, first_name: str | None, last_name: str | None):
+    from database import get_admin_settings
+    settings = get_admin_settings()
+    if not settings.get("notify_new_users", True):
+        return
+        
+    from config import ADMIN_IDS
+    username_str = f"@{username}" if username else "нет"
+    name_str = f"{first_name or ''} {last_name or ''}".strip() or "Пользователь"
+    text = (
+        f"🔔 *Новый пользователь!*\n\n"
+        f"👤 Имя: *{name_str}*\n"
+        f"🆔 ID: `{user_id}`\n"
+        f"🔗 Аккаунт: {username_str}"
+    )
+    for admin_id in ADMIN_IDS:
+        try:
+            await bot.send_message(chat_id=admin_id, text=text, parse_mode="Markdown")
+        except Exception:
+            pass
 
 def track_user(message: Message):
     uid = message.from_user.id
     username = message.from_user.username
     first_name = message.from_user.first_name
     last_name = message.from_user.last_name
-    update_user_activity(uid, username, first_name, last_name)
+    is_new = update_user_activity(uid, username, first_name, last_name)
+    if is_new:
+        asyncio.create_task(notify_admins_about_new_user(message.bot, uid, username, first_name, last_name))
 
 def track_callback(call: CallbackQuery):
     uid = call.from_user.id
     username = call.from_user.username
     first_name = call.from_user.first_name
     last_name = call.from_user.last_name
-    update_user_activity(uid, username, first_name, last_name)
+    is_new = update_user_activity(uid, username, first_name, last_name)
+    if is_new:
+        asyncio.create_task(notify_admins_about_new_user(call.message.bot, uid, username, first_name, last_name))
 
 # ===================================================================
 #  TEXTS
@@ -576,7 +603,7 @@ async def check_admin_password(message: Message, state: FSMContext):
             except Exception:
                 pass
                 
-        from database import get_admin_stats, generate_users_report
+        from database import get_admin_stats, generate_users_report, get_admin_settings
         
         stats_text = get_admin_stats()
         report_file = generate_users_report()
@@ -584,14 +611,21 @@ async def check_admin_password(message: Message, state: FSMContext):
         uid = message.from_user.id
         group = get_user_group(uid)
         
+        settings = get_admin_settings()
+        notify_status = settings.get("notify_new_users", True)
+        
         await message.answer(
             stats_text, 
             parse_mode="Markdown", 
-            reply_markup=main_menu(has_group=bool(group), user_id=uid)
+            reply_markup=admin_panel_keyboard(notify_status)
         )
         
         doc = FSInputFile(report_file, filename="users_report.xlsx")
-        await message.answer_document(doc, caption="📋 Полный отчет о пользователях бота")
+        await message.answer_document(
+            doc, 
+            caption="📋 Полный отчет о пользователях бота",
+            reply_markup=main_menu(has_group=bool(group), user_id=uid)
+        )
         
         import os
         try:
@@ -610,6 +644,22 @@ async def check_admin_password(message: Message, state: FSMContext):
             "❌ Неверный пароль. Попробуйте еще раз или напишите *Отмена*:"
         )
         await state.update_data(prompt_msg_id=sent_msg.message_id)
+
+
+@router.callback_query(F.data == "toggle_notify")
+async def on_toggle_notify(call: CallbackQuery):
+    track_callback(call)
+    from database import get_admin_settings, set_admin_settings
+    
+    settings = get_admin_settings()
+    current_status = settings.get("notify_new_users", True)
+    new_status = not current_status
+    settings["notify_new_users"] = new_status
+    set_admin_settings(settings)
+    
+    from keyboards import admin_panel_keyboard
+    await call.message.edit_reply_markup(reply_markup=admin_panel_keyboard(new_status))
+    await call.answer(f"Уведомления {'включены' if new_status else 'выключены'}!", show_alert=False)
 
 # ===================================================================
 #  Unknown message
