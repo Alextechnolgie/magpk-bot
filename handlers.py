@@ -359,7 +359,7 @@ async def schedule_today(message: Message):
 
     msg = await message.answer(LOADING)
     today = date.today()
-    text = await fetch_schedule(group, today)
+    text = await fetch_schedule(group, today, interface=interface)
     lessons = await fetch_schedule_data(group, today)
     g_links = get_google_calendar_lesson_links(group, today, lessons)
     
@@ -386,7 +386,7 @@ async def schedule_tomorrow(message: Message):
 
     msg = await message.answer(LOADING)
     tomorrow = date.today() + timedelta(days=1)
-    text = await fetch_schedule(group, tomorrow)
+    text = await fetch_schedule(group, tomorrow, interface=interface)
     lessons = await fetch_schedule_data(group, tomorrow)
     g_links = get_google_calendar_lesson_links(group, tomorrow, lessons)
     
@@ -415,7 +415,7 @@ async def schedule_week(message: Message):
 
     today = date.today()
     monday = today - timedelta(days=today.weekday())
-    days_texts = await fetch_week_schedule(group, monday)
+    days_texts = await fetch_week_schedule(group, monday, interface=interface)
 
     await msg.delete()
     for text in days_texts:
@@ -466,7 +466,9 @@ async def on_day_select(call: CallbackQuery):
 
     await call.message.edit_text(LOADING)
     target_date = date.fromisoformat(date_str)
-    text = await fetch_schedule(group, target_date)
+    uid = call.from_user.id
+    interface = get_user_interface(uid)
+    text = await fetch_schedule(group, target_date, interface=interface)
     lessons = await fetch_schedule_data(group, target_date)
     g_links = get_google_calendar_lesson_links(group, target_date, lessons)
     await call.message.edit_text(text, parse_mode="Markdown",

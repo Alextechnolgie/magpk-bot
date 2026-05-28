@@ -238,11 +238,70 @@ async def _get_lessons(group: str, target_date: date) -> list[dict] | None | str
 #  ПУБЛИЧНЫЕ ФУНКЦИИ
 # ═══════════════════════════════════════════════════════════════════════════════
 
-async def fetch_schedule(group: str, target_date: date) -> str:
+def _abbreviate_teacher_name(name: str) -> str:
+    """Сокращает ФИО преподавателя до Фамилия И.И."""
+    if not name:
+        return ""
+    parts = name.strip().split()
+    if len(parts) >= 3:
+        return f"{parts[0]} {parts[1][0]}.{parts[2][0]}."
+    elif len(parts) == 2:
+        return f"{parts[0]} {parts[1][0]}."
+    return name
+
+
+def _format_schedule_compact(group: str, day_name: str, date_formatted: str, lessons: list[dict]) -> str:
+    """Компактное форматирование расписания (каждая пара в одну строку)."""
+    lines = [
+        f"📅 *{group}* • {day_name}",
+        f"🗓 {date_formatted}",
+        "",
+    ]
+
+    pair_emojis = {
+        "1": "1️⃣", "2": "2️⃣", "3": "3️⃣", "4": "4️⃣",
+        "5": "5️⃣", "6": "6️⃣", "7": "7️⃣",
+    }
+
+    for lesson in lessons:
+        pair_num = lesson["pair_num"]
+        digit = re.search(r'\d', pair_num)
+        emoji = pair_emojis.get(digit.group() if digit else "", "📗")
+
+        time_str = lesson["time"]
+        subject = lesson["subject"]
+        teacher = _abbreviate_teacher_name(lesson["teacher"])
+        room = lesson["room"]
+
+        # Формируем одну строку для пары
+        parts = [f"{emoji}"]
+        if time_str:
+            parts.append(f"`{time_str}`")
+        parts.append(f"*{subject}*")
+        
+        details = []
+        if teacher:
+            details.append(teacher)
+        if room:
+            details.append(room)
+            
+        line = " ".join(parts)
+        if details:
+            line += " • " + " • ".join(details)
+            
+        lines.append(line)
+
+    count = len(lessons)
+    word = "пара" if count == 1 else ("пары" if 2 <= count <= 4 else "пар")
+    lines.append(f"\n📊 Всего: *{count} {word}*")
+    
+    return "\n".join(lines)
+
+
+async def fetch_schedule(group: str, target_date: date, interface: str = "full") -> str:
     """
     Получает расписание для группы на указанную дату.
     Возвращает отформатированную строку для Telegram.
-    Данные берутся из кэша или загружаются с сайта (и кэшируются).
     """
     day_name = WEEKDAYS_RU[target_date.weekday()]
     date_formatted = target_date.strftime("%d.%m.%Y")
@@ -258,8 +317,7 @@ async def fetch_schedule(group: str, target_date: date) -> str:
         return (
             f"📅  *{group}*  •  {day_name}\n"
             f"🗓  {date_formatted}\n\n"
-            f"ℹ️ Расписание не найдено.\n"
-            f"Возможно, данные ещё не добавлены."
+            f"ℹ️ Расписание не найдено."
         )
 
     # Пустой список = выходной
@@ -267,9 +325,11 @@ async def fetch_schedule(group: str, target_date: date) -> str:
         return (
             f"📅  *{group}*  •  {day_name}\n"
             f"🗓  {date_formatted}\n\n"
-            f"🎉 *Занятий нет!* Отдыхай!"
+            f"🎉 *Занятий нет!*"
         )
 
+    if interface == "compact":
+        return _format_schedule_compact(group, day_name, date_formatted, result)
     return _format_schedule(group, day_name, date_formatted, result)
 
 
@@ -284,14 +344,14 @@ async def fetch_schedule_data(group: str, target_date: date) -> list[dict]:
     return result
 
 
-async def fetch_week_schedule(group: str, start_date: date) -> list[str]:
+async def fetch_week_schedule(group: str, start_date: date, interface: str = "full") -> list[str]:
     """Расписание на неделю (пн-сб). Все дни кэшируются отдельно."""
     results = []
     for i in range(6):
         day = start_date + timedelta(days=i)
         if day.weekday() == 6:
             continue
-        text = await fetch_schedule(group, day)
+        text = await fetch_schedule(group, day, interface=interface)
         results.append(text)
     return results
 
