@@ -60,7 +60,7 @@ async def notify_admins_about_new_user(bot, user_id: int, username: str | None, 
     )
     for admin_id in ADMIN_IDS:
         try:
-            await bot.send_message(chat_id=admin_id, text=text, parse_mode="Markdown")
+            await bot.send_message(chat_id=admin_id, text=text, parse_mode="Markdown", disable_notification=True)
         except Exception:
             pass
 
@@ -805,7 +805,7 @@ async def on_broadcast_all(call: CallbackQuery, state: FSMContext):
     success, fail = 0, 0
     for uid_str in uids:
         try:
-            await call.bot.send_message(chat_id=int(uid_str), text=text, parse_mode="Markdown")
+            await call.bot.send_message(chat_id=int(uid_str), text=text, parse_mode="Markdown", disable_notification=True)
             success += 1
             await asyncio.sleep(0.05) # Лимит Telegram
         except Exception:
@@ -891,7 +891,7 @@ async def on_broadcast_group_execute(call: CallbackQuery, state: FSMContext):
     success, fail = 0, 0
     for uid_str in target_uids:
         try:
-            await call.bot.send_message(chat_id=int(uid_str), text=text, parse_mode="Markdown")
+            await call.bot.send_message(chat_id=int(uid_str), text=text, parse_mode="Markdown", disable_notification=True)
             success += 1
             await asyncio.sleep(0.05)
         except Exception:
