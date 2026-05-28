@@ -256,10 +256,8 @@ async def fetch_schedule(group: str, target_date: date) -> str:
     # Данные не найдены
     if result is None:
         return (
-            f"┌─────────────────────────────┐\n"
-            f"  📅  *{group}*  •  {day_name}\n"
-            f"  🗓  {date_formatted}\n"
-            f"└─────────────────────────────┘\n\n"
+            f"📅  *{group}*  •  {day_name}\n"
+            f"🗓  {date_formatted}\n\n"
             f"ℹ️ Расписание не найдено.\n"
             f"Возможно, данные ещё не добавлены."
         )
@@ -267,10 +265,8 @@ async def fetch_schedule(group: str, target_date: date) -> str:
     # Пустой список = выходной
     if not result:
         return (
-            f"┌─────────────────────────────┐\n"
-            f"  📅  *{group}*  •  {day_name}\n"
-            f"  🗓  {date_formatted}\n"
-            f"└─────────────────────────────┘\n\n"
+            f"📅  *{group}*  •  {day_name}\n"
+            f"🗓  {date_formatted}\n\n"
             f"🎉 *Занятий нет!* Отдыхай!"
         )
 
@@ -322,10 +318,8 @@ def _get_break_info(end_time: str, start_time: str) -> str | None:
 def _format_schedule(group: str, day_name: str, date_formatted: str, lessons: list[dict]) -> str:
     """Форматирует расписание в красивый текст для Telegram."""
     lines = [
-        f"┌─────────────────────────────┐",
-        f"  📅  *{group}*  •  {day_name}",
-        f"  🗓  {date_formatted}",
-        f"└─────────────────────────────┘",
+        f"📅  *{group}*  •  {day_name}",
+        f"🗓  {date_formatted}",
         "",
     ]
 
