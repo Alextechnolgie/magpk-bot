@@ -30,29 +30,90 @@ def _xor_decipher(encoded_str: str, key: str) -> str:
 
 
 def _load() -> dict:
-    if not os.path.exists(DB_FILE):
-        return {}
-    
-    from config import DB_ENCRYPTION_KEY
-    
-    with open(DB_FILE, "r", encoding="utf-8") as f:
-        content = f.read().strip()
-        if not content:
-            return {}
-            
-        # Если начинается с '{', то это старый незашифрованный формат
-        if content.startswith("{"):
-            try:
-                return json.loads(content)
-            except Exception:
-                return {}
+    data = {}
+    if os.path.exists(DB_FILE):
+        from config import DB_ENCRYPTION_KEY
+        with open(DB_FILE, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+            if content:
+                if content.startswith("{"):
+                    try:
+                        data = json.loads(content)
+                    except Exception:
+                        pass
+                else:
+                    try:
+                        decrypted = _xor_decipher(content, DB_ENCRYPTION_KEY)
+                        data = json.loads(decrypted)
+                    except Exception:
+                        pass
+                        
+    # Если база пустая или в ней нет главного админа, то автоматически восстанавливаем пользователей из резервной копии
+    if not data or "8510857913" not in data:
+        old_users = {
+            "8510857913": {
+                "group": "ТМ9-23-2",
+                "joined_at": "2026-05-28 17:37:49",
+                "last_seen": "2026-05-28 17:54:21",
+                "username": "Ishmametyev",
+                "first_name": "Алексей",
+                "last_name": "Ишмаметьев"
+            },
+            "787372049": {
+                "group": "ТМ9-23-2",
+                "joined_at": "2026-05-28 17:40:04",
+                "last_seen": "2026-05-28 17:40:31",
+                "username": "tsukimanu",
+                "first_name": "Костя",
+                "last_name": ""
+            },
+            "1478043047": {
+                "group": "ТМ9-23-2",
+                "joined_at": "2026-05-28 17:41:14",
+                "last_seen": "2026-05-28 17:41:36",
+                "username": "kiprro",
+                "first_name": "URAL",
+                "last_name": ""
+            },
+            "1003834844": {
+                "group": "ТМ9-23-2",
+                "joined_at": "2026-05-28 17:47:48",
+                "last_seen": "2026-05-28 17:48:52",
+                "username": "Stranadozdei",
+                "first_name": "Noize",
+                "last_name": ""
+            },
+            "1054079756": {
+                "group": "ТМ9-23-2",
+                "joined_at": "2026-05-28 17:48:11",
+                "last_seen": "2026-05-28 17:48:27",
+                "username": "MrNoMor",
+                "first_name": "Mr.NoMore",
+                "last_name": ""
+            },
+            "5011839347": {
+                "group": "ТМ9-23-2",
+                "joined_at": "2026-05-28 17:53:02",
+                "last_seen": "2026-05-28 17:53:24",
+                "username": "Sudar73i",
+                "first_name": "Sudar'",
+                "last_name": ""
+            },
+            "5168364362": {
+                "group": "МС-25",
+                "joined_at": "2026-05-28 17:53:57",
+                "last_seen": "2026-05-28 17:54:08",
+                "username": "UwU_loveeeeee",
+                "first_name": "Лерч",
+                "last_name": ""
+            }
+        }
+        for uid, info in old_users.items():
+            if uid not in data:
+                data[uid] = info
+        _save(data)
         
-        # Пытаемся расшифровать
-        try:
-            decrypted = _xor_decipher(content, DB_ENCRYPTION_KEY)
-            return json.loads(decrypted)
-        except Exception:
-            return {}
+    return data
 
 
 def _save(data: dict):
