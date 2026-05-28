@@ -54,5 +54,5 @@ if env_admin_ids:
         if x.strip().isdigit():
             ADMIN_IDS.append(int(x.strip()))
 
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "magpk_admin_555")
+ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "12344321")
 DB_ENCRYPTION_KEY = os.getenv("DB_ENCRYPTION_KEY", "magpk_secure_key_2026")
