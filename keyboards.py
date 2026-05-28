@@ -127,11 +127,7 @@ def about_keyboard() -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(
             text="💬 Написать автору",
-            url="https://t.me/Alextechnolgie"
-        )],
-        [InlineKeyboardButton(
-            text="⭐ GitHub проекта",
-            url="https://github.com/Alextechnolgie/magpk-bot"
+            url="https://t.me/Ishmametyev"
         )],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
