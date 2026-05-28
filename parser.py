@@ -346,12 +346,12 @@ def _format_schedule(group: str, day_name: str, date_formatted: str, lessons: li
 
         lines.append(f"{emoji}  *{pair_num}*")
         if time_str:
-            lines.append(f"    🕐  {time_str}")
-        lines.append(f"    📖  {subject}")
+            lines.append(f"    🕐  *{time_str}*")
+        lines.append(f"    📖  *{subject}*")
         if teacher:
             lines.append(f"    👤  {teacher}")
         if room:
-            lines.append(f"    🚪  {room}")
+            lines.append(f"    🚪  *{room}*")
         
         # Добавляем перемену, если есть следующая пара
         if i < len(lessons) - 1:
