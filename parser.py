@@ -304,6 +304,23 @@ async def fetch_week_schedule(group: str, start_date: date) -> list[str]:
 #  ФОРМАТИРОВАНИЕ
 # ═══════════════════════════════════════════════════════════════════════════════
 
+def _get_break_info(end_time: str, start_time: str) -> str | None:
+    """Возвращает информацию о перемене между парами."""
+    try:
+        fmt = "%H:%M"
+        t1 = time.strptime(end_time, fmt)
+        t2 = time.strptime(start_time, fmt)
+        diff = (t2.tm_hour * 60 + t2.tm_min) - (t1.tm_hour * 60 + t1.tm_min)
+        if 0 < diff <= 60:
+            label = "☕️ Перемена"
+            if diff >= 20:
+                label = "🍱 Большая перемена"
+            return f"    _{label} — {diff} мин._"
+    except:
+        pass
+    return None
+
+
 def _format_schedule(group: str, day_name: str, date_formatted: str, lessons: list[dict]) -> str:
     """Форматирует расписание в красивый текст для Telegram."""
     lines = [
@@ -319,7 +336,7 @@ def _format_schedule(group: str, day_name: str, date_formatted: str, lessons: li
         "5": "5️⃣", "6": "6️⃣", "7": "7️⃣",
     }
 
-    for lesson in lessons:
+    for i, lesson in enumerate(lessons):
         pair_num = lesson["pair_num"]
         digit = re.search(r'\d', pair_num)
         emoji = pair_emojis.get(digit.group() if digit else "", "📗")
@@ -337,6 +354,20 @@ def _format_schedule(group: str, day_name: str, date_formatted: str, lessons: li
             lines.append(f"    👤  {teacher}")
         if room:
             lines.append(f"    🚪  {room}")
+        
+        # Добавляем перемену, если есть следующая пара
+        if i < len(lessons) - 1:
+            next_lesson = lessons[i+1]
+            if time_str and next_lesson.get("time"):
+                # Парсим время текущей пары (конец) и следующей (начало)
+                # Пример time_str: "08:15-09:50"
+                curr_times = re.findall(r'\d{2}:\d{2}', time_str)
+                next_times = re.findall(r'\d{2}:\d{2}', next_lesson["time"])
+                if len(curr_times) == 2 and len(next_times) >= 1:
+                    break_info = _get_break_info(curr_times[1], next_times[0])
+                    if break_info:
+                        lines.append(break_info)
+        
         lines.append("")
 
     count = len(lessons)

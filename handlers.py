@@ -15,7 +15,8 @@ from keyboards import (
     group_prefix_keyboard,
     groups_by_prefix_keyboard,
     days_keyboard,
-    calendar_button,
+    calendar_keyboard,
+    week_calendar_keyboard,
     about_keyboard,
 )
 from parser import (
@@ -24,7 +25,7 @@ from parser import (
     fetch_week_schedule,
     cache_stats,
 )
-from calendar_export import generate_ics_for_day
+from calendar_export import generate_ics_for_day, generate_ics, get_google_calendar_day_link
 from database import get_user_group, set_user_group
 
 router = Router()
@@ -224,9 +225,12 @@ async def schedule_today(message: Message):
     msg = await message.answer(LOADING)
     today = date.today()
     text = await fetch_schedule(group, today)
+    lessons = await fetch_schedule_data(group, today)
+    g_url = get_google_calendar_day_link(group, today, lessons)
+    
     await msg.edit_text(text, parse_mode="Markdown",
                         disable_web_page_preview=True,
-                        reply_markup=calendar_button(today.isoformat()))
+                        reply_markup=calendar_keyboard(today.isoformat(), g_url))
 
 
 # ===================================================================
@@ -246,9 +250,12 @@ async def schedule_tomorrow(message: Message):
     msg = await message.answer(LOADING)
     tomorrow = date.today() + timedelta(days=1)
     text = await fetch_schedule(group, tomorrow)
+    lessons = await fetch_schedule_data(group, tomorrow)
+    g_url = get_google_calendar_day_link(group, tomorrow, lessons)
+    
     await msg.edit_text(text, parse_mode="Markdown",
                         disable_web_page_preview=True,
-                        reply_markup=calendar_button(tomorrow.isoformat()))
+                        reply_markup=calendar_keyboard(tomorrow.isoformat(), g_url))
 
 
 # ===================================================================
@@ -278,9 +285,18 @@ async def schedule_week(message: Message):
         while day.weekday() == 6:
             day_offset += 1
             day = monday + timedelta(days=day_offset)
-        await message.answer(text, parse_mode="Markdown",
-                             disable_web_page_preview=True,
-                             reply_markup=calendar_button(day.isoformat()))
+        
+        # Для последнего дня недели добавляем кнопку экспорта всей недели
+        markup = calendar_keyboard(day.isoformat())
+        if i == len(days_texts) - 1:
+            # Можно было бы объединить, но лучше прислать отдельным сообщением или добавить в последнее
+            await message.answer(text, parse_mode="Markdown",
+                                 disable_web_page_preview=True,
+                                 reply_markup=week_calendar_keyboard(monday.isoformat()))
+        else:
+            await message.answer(text, parse_mode="Markdown",
+                                 disable_web_page_preview=True,
+                                 reply_markup=markup)
 
 
 # ===================================================================
@@ -317,7 +333,7 @@ async def on_day_select(call: CallbackQuery):
     text = await fetch_schedule(group, target_date)
     await call.message.edit_text(text, parse_mode="Markdown",
                                  disable_web_page_preview=True,
-                                 reply_markup=calendar_button(target_date.isoformat()))
+                                 reply_markup=calendar_keyboard(target_date.isoformat()))
 
 
 # ===================================================================
@@ -365,6 +381,58 @@ async def on_export_calendar(call: CallbackQuery):
         f"_\u041e\u0442\u043a\u0440\u043e\u0439 \u0444\u0430\u0439\u043b \u2014 \u043e\u043d \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438\n"
         f"\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u0441\u044f \u0432 \u0442\u0432\u043e\u0439 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c!_\n\n"
         f"\u2705 \u0420\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u043d\u0430 iOS, Android, Windows"
+    )
+
+    await call.message.answer_document(
+        doc,
+        caption=caption,
+        parse_mode="Markdown",
+    )
+
+    import os
+    try:
+        os.remove(filepath)
+    except OSError:
+        pass
+
+
+@router.callback_query(F.data.startswith("export_week:"))
+async def on_export_week(call: CallbackQuery):
+    monday_str = call.data.split(":", 1)[1]
+    uid = call.from_user.id
+    group = get_user_group(uid)
+
+    if not group:
+        await call.answer("Сначала выбери группу!", show_alert=True)
+        return
+
+    monday = date.fromisoformat(monday_str)
+    await call.answer("🗓 Формирую календарь на неделю...")
+
+    week_data = []
+    for i in range(6):  # Пн-Сб
+        target_date = monday + timedelta(days=i)
+        lessons = await fetch_schedule_data(group, target_date)
+        if lessons:
+            week_data.append((target_date, lessons))
+
+    if not week_data:
+        await call.answer("📭 Нет занятий на этой неделе!", show_alert=True)
+        return
+
+    filepath = generate_ics(group, week_data, "week")
+
+    if not filepath:
+        await call.answer("❌ Не удалось создать файл", show_alert=True)
+        return
+
+    doc = FSInputFile(filepath, filename=f"Расписание_{group}_неделя.ics")
+    
+    caption = (
+        f"🗓 *Расписание на неделю для календаря*\n\n"
+        f"👥 Группа: *{group}*\n"
+        f"📅 С {monday.strftime('%d.%m')} по {(monday + timedelta(days=5)).strftime('%d.%m')}\n\n"
+        f"_Открой файл — все пары недели добавятся в твой календарь сразу!_"
     )
 
     await call.message.answer_document(

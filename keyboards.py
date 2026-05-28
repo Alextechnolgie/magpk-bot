@@ -91,14 +91,30 @@ def days_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-# ─── Кнопка "Добавить в календарь" ──────────────────────────────────────────
+# ─── Кнопки календаря ────────────────────────────────────────────────────────
 
-def calendar_button(target_date_iso: str) -> InlineKeyboardMarkup:
-    """Inline-кнопка для экспорта расписания в календарь."""
+def calendar_keyboard(target_date_iso: str, google_url: str = "") -> InlineKeyboardMarkup:
+    """Inline-кнопки для экспорта расписания на день."""
     buttons = [
         [InlineKeyboardButton(
-            text="📲 Добавить в календарь",
+            text="🍏 iPhone / iOS (файл)",
             callback_data=f"export_cal:{target_date_iso}"
+        )],
+    ]
+    if google_url:
+        buttons.append([InlineKeyboardButton(
+            text="🤖 Google Календарь (ссылка)",
+            url=google_url
+        )])
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def week_calendar_keyboard(monday_iso: str) -> InlineKeyboardMarkup:
+    """Inline-кнопки для экспорта расписания на всю неделю."""
+    buttons = [
+        [InlineKeyboardButton(
+            text="🗓 Добавить ВСЮ НЕДЕЛЮ (iPhone)",
+            callback_data=f"export_week:{monday_iso}"
         )],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
