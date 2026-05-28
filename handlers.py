@@ -25,7 +25,7 @@ from parser import (
     fetch_week_schedule,
     cache_stats,
 )
-from calendar_export import generate_ics_for_day, generate_ics, get_google_calendar_day_link
+from calendar_export import generate_ics_for_day, generate_ics, get_google_calendar_lesson_links
 from database import get_user_group, set_user_group
 
 router = Router()
@@ -243,11 +243,11 @@ async def schedule_today(message: Message):
     today = date.today()
     text = await fetch_schedule(group, today)
     lessons = await fetch_schedule_data(group, today)
-    g_url = get_google_calendar_day_link(group, today, lessons)
+    g_links = get_google_calendar_lesson_links(group, today, lessons)
     
     await msg.edit_text(text, parse_mode="Markdown",
                         disable_web_page_preview=True,
-                        reply_markup=calendar_keyboard(today.isoformat(), g_url))
+                        reply_markup=calendar_keyboard(today.isoformat(), g_links))
 
 
 # ===================================================================
@@ -268,11 +268,11 @@ async def schedule_tomorrow(message: Message):
     tomorrow = date.today() + timedelta(days=1)
     text = await fetch_schedule(group, tomorrow)
     lessons = await fetch_schedule_data(group, tomorrow)
-    g_url = get_google_calendar_day_link(group, tomorrow, lessons)
+    g_links = get_google_calendar_lesson_links(group, tomorrow, lessons)
     
     await msg.edit_text(text, parse_mode="Markdown",
                         disable_web_page_preview=True,
-                        reply_markup=calendar_keyboard(tomorrow.isoformat(), g_url))
+                        reply_markup=calendar_keyboard(tomorrow.isoformat(), g_links))
 
 
 # ===================================================================
@@ -343,10 +343,10 @@ async def on_day_select(call: CallbackQuery):
     target_date = date.fromisoformat(date_str)
     text = await fetch_schedule(group, target_date)
     lessons = await fetch_schedule_data(group, target_date)
-    g_url = get_google_calendar_day_link(group, target_date, lessons)
+    g_links = get_google_calendar_lesson_links(group, target_date, lessons)
     await call.message.edit_text(text, parse_mode="Markdown",
                                  disable_web_page_preview=True,
-                                 reply_markup=calendar_keyboard(target_date.isoformat(), g_url))
+                                 reply_markup=calendar_keyboard(target_date.isoformat(), g_links))
 
 
 # ===================================================================

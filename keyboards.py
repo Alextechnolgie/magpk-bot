@@ -93,19 +93,27 @@ def days_keyboard() -> InlineKeyboardMarkup:
 
 # ─── Кнопки календаря ────────────────────────────────────────────────────────
 
-def calendar_keyboard(target_date_iso: str, google_url: str = "") -> InlineKeyboardMarkup:
+def calendar_keyboard(target_date_iso: str, google_links: list[tuple[str, str]] = None) -> InlineKeyboardMarkup:
     """Inline-кнопки для экспорта расписания на день."""
     buttons = [
         [InlineKeyboardButton(
-            text="🍏 iPhone / iOS (файл)",
+            text="🍏 Добавить всё в календарь (.ics)",
             callback_data=f"export_cal:{target_date_iso}"
         )],
     ]
-    if google_url:
-        buttons.append([InlineKeyboardButton(
-            text="🤖 Google Календарь (ссылка)",
-            url=google_url
-        )])
+    if google_links:
+        row = []
+        for label, url in google_links:
+            row.append(InlineKeyboardButton(
+                text=f"🤖 Google: {label}",
+                url=url
+            ))
+            if len(row) == 2:
+                buttons.append(row)
+                row = []
+        if row:
+            buttons.append(row)
+            
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 

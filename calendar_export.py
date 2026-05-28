@@ -88,13 +88,12 @@ def generate_ics(
             room = lesson.get("room", "")
             pair_num = lesson.get("pair_num", f"{i} пара")
 
-            # Описание события
             description_parts = [f"📚 {pair_num}"]
             if teacher:
                 description_parts.append(f"👤 {teacher}")
             if room:
                 description_parts.append(f"🚪 {room}")
-            description_parts.append(f"\nГруппа: {group}")
+            description_parts.append(f"Группа: {group}")
             description_parts.append("Создано ботом МАГПК Расписание")
             description = "\\n".join(description_parts)
 
@@ -238,7 +237,7 @@ TZOFFSETTO:+0500
 TZNAME:+05
 END:STANDARD
 END:VTIMEZONE
-{"".join(all_events)}
+{"\n".join(all_events)}
 END:VCALENDAR"""
 
     # Записываем во временный файл
@@ -255,47 +254,57 @@ def generate_ics_for_day(group: str, target_date: date, lessons: list[dict]) -> 
     return generate_ics(group, [(target_date, lessons)], "day")
 
 
-def get_google_calendar_day_link(group: str, target_date: date, lessons: list[dict]) -> str:
-    """Генерирует ссылку для добавления всего дня в Google Calendar одним событием."""
+def get_google_calendar_lesson_links(group: str, target_date: date, lessons: list[dict]) -> list[tuple[str, str]]:
+    """Генерирует ссылки для добавления каждой пары в Google Calendar отдельными событиями."""
+    links = []
     if not lessons:
-        return ""
+        return links
         
-    subject = f"Расписание {group}"
-    
-    # Берем время первой и последней пары
-    first_lesson = lessons[0]
-    last_lesson = lessons[-1]
-    
-    start_t, _ = _parse_time_range(first_lesson.get("time", "")) or ("08:15", "09:50")
-    _, end_t = _parse_time_range(last_lesson.get("time", "")) or ("15:35", "17:10")
-    
-    s_h, s_m = map(int, start_t.split(":"))
-    e_h, e_m = map(int, end_t.split(":"))
-    
-    dt_start = datetime(target_date.year, target_date.month, target_date.day, s_h, s_m)
-    dt_end = datetime(target_date.year, target_date.month, target_date.day, e_h, e_m)
-    
-    utc_start = (dt_start - timedelta(hours=5)).strftime("%Y%m%dT%H%M%SZ")
-    utc_end = (dt_end - timedelta(hours=5)).strftime("%Y%m%dT%H%M%SZ")
-    
-    # Формируем описание из всех пар
-    description_lines = [f"📅 Расписание на {target_date.strftime('%d.%m.%Y')}", ""]
-    for l in lessons:
-        description_lines.append(f"🔹 {l.get('pair_num', '')}: {l.get('subject', '')}")
-        if l.get('room'):
-            description_lines.append(f"   🚪 {l.get('room')}")
-        if l.get('teacher'):
-            description_lines.append(f"   👤 {l.get('teacher')}")
-        description_lines.append("")
+    for i, lesson in enumerate(lessons, 1):
+        subject = lesson.get("subject", "Занятие")
+        pair_num = lesson.get("pair_num", f"{i} пара")
         
-    description = "\\n".join(description_lines)
-    
-    params = {
-        "action": "TEMPLATE",
-        "text": subject,
-        "dates": f"{utc_start}/{utc_end}",
-        "details": description,
-        "location": "МАГПК",
-    }
-    
-    return "https://www.google.com/calendar/render?" + urllib.parse.urlencode(params)
+        # Определяем время
+        time_str = lesson.get("time", "")
+        parsed = _parse_time_range(time_str)
+        if parsed:
+            start_time_str, end_time_str = parsed
+        else:
+            times = PAIR_TIMES.get(pair_num, PAIR_TIMES.get(f"{i} пара", ("08:00", "09:35")))
+            start_time_str, end_time_str = times
+
+        s_h, s_m = map(int, start_time_str.split(":"))
+        e_h, e_m = map(int, end_time_str.split(":"))
+        
+        dt_start = datetime(target_date.year, target_date.month, target_date.day, s_h, s_m)
+        dt_end = datetime(target_date.year, target_date.month, target_date.day, e_h, e_m)
+        
+        # Разница часового пояса (+5 к UTC)
+        utc_start = (dt_start - timedelta(hours=5)).strftime("%Y%m%dT%H%M%SZ")
+        utc_end = (dt_end - timedelta(hours=5)).strftime("%Y%m%dT%H%M%SZ")
+        
+        teacher = lesson.get("teacher", "")
+        room = lesson.get("room", "")
+        
+        # Описание события
+        description_parts = [f"📚 {pair_num}"]
+        if teacher:
+            description_parts.append(f"👤 {teacher}")
+        if room:
+            description_parts.append(f"🚪 {room}")
+        description_parts.append(f"Группа: {group}")
+        description_parts.append("Создано ботом МАГПК Расписание")
+        description = "\\n".join(description_parts)
+        
+        params = {
+            "action": "TEMPLATE",
+            "text": f"{subject} ({pair_num})",
+            "dates": f"{utc_start}/{utc_end}",
+            "details": description,
+            "location": room if room else "МАГПК",
+        }
+        
+        url = "https://www.google.com/calendar/render?" + urllib.parse.urlencode(params)
+        links.append((pair_num, url))
+        
+    return links
