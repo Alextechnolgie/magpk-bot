@@ -497,6 +497,23 @@ async def cmd_cancel(message: Message, state: FSMContext):
     current_state = await state.get_state()
     if current_state is None:
         return
+        
+    state_data = await state.get_data()
+    prompt_msg_id = state_data.get("prompt_msg_id")
+    
+    # Удаляем сообщение пользователя
+    try:
+        await message.delete()
+    except Exception:
+        pass
+        
+    # Удаляем сообщение с запросом пароля
+    if prompt_msg_id:
+        try:
+            await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_msg_id)
+        except Exception:
+            pass
+            
     await state.clear()
     uid = message.from_user.id
     group = get_user_group(uid)
@@ -516,24 +533,49 @@ async def cmd_admin(message: Message, state: FSMContext):
         await message.answer("❌ Доступ ограничен.")
         return
 
+    # Удаляем команду администратора для чистоты чата
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
     await state.set_state(AdminStates.waiting_for_password)
     from aiogram.types import ReplyKeyboardRemove
-    await message.answer(
+    sent_msg = await message.answer(
         "🔑 Введите секретный пароль доступа (или отправьте *Отмена* для отмены):",
         parse_mode="Markdown",
         reply_markup=ReplyKeyboardRemove()
     )
+    # Сохраняем ID сообщения с приглашением
+    await state.update_data(prompt_msg_id=sent_msg.message_id)
 
 @router.message(AdminStates.waiting_for_password)
 async def check_admin_password(message: Message, state: FSMContext):
     track_user(message)
     from config import ADMIN_PASSWORD
     
+    # Сразу удаляем сообщение пользователя с паролем для конфиденциальности
+    try:
+        await message.delete()
+    except Exception:
+        pass
+        
     password_entered = message.text.strip() if message.text else ""
+    
+    # Получаем ID предыдущего сообщения-приглашения
+    state_data = await state.get_data()
+    prompt_msg_id = state_data.get("prompt_msg_id")
     
     if password_entered == ADMIN_PASSWORD:
         await state.clear()
         
+        # Удаляем сообщение с просьбой ввести пароль
+        if prompt_msg_id:
+            try:
+                await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_msg_id)
+            except Exception:
+                pass
+                
         from database import get_admin_stats, generate_users_report
         
         stats_text = get_admin_stats()
@@ -557,9 +599,17 @@ async def check_admin_password(message: Message, state: FSMContext):
         except OSError:
             pass
     else:
-        await message.answer(
+        # Если пароль неверный, удаляем старое приглашение и присылаем новое
+        if prompt_msg_id:
+            try:
+                await message.bot.delete_message(chat_id=message.chat.id, message_id=prompt_msg_id)
+            except Exception:
+                pass
+                
+        sent_msg = await message.answer(
             "❌ Неверный пароль. Попробуйте еще раз или напишите *Отмена*:"
         )
+        await state.update_data(prompt_msg_id=sent_msg.message_id)
 
 # ===================================================================
 #  Unknown message
