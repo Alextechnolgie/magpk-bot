@@ -21,6 +21,7 @@ from keyboards import (
     week_calendar_keyboard,
     about_keyboard,
     admin_panel_keyboard,
+    settings_keyboard,
 )
 from parser import (
     fetch_schedule,
@@ -30,7 +31,13 @@ from parser import (
 )
 import asyncio
 from calendar_export import generate_ics_for_day, generate_ics, get_google_calendar_lesson_links
-from database import get_user_group, set_user_group, update_user_activity
+from database import (
+    get_user_group, 
+    set_user_group, 
+    update_user_activity, 
+    get_user_interface, 
+    set_user_interface
+)
 
 router = Router()
 
@@ -174,18 +181,86 @@ async def cmd_start(message: Message):
     track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
+    interface = get_user_interface(uid)
     if group:
         await message.answer(
             WELCOME_BACK.format(group=group),
             parse_mode="Markdown",
-            reply_markup=main_menu(has_group=True, user_id=uid),
+            reply_markup=main_menu(has_group=True, user_id=uid, interface=interface),
         )
     else:
         await message.answer(
             WELCOME_NEW,
             parse_mode="Markdown",
-            reply_markup=main_menu(has_group=False, user_id=uid),
+            reply_markup=main_menu(has_group=False, user_id=uid, interface=interface),
         )
+
+
+# ===================================================================
+#  Settings
+# ===================================================================
+
+@router.message(F.text == "⚙️ Настройки")
+@router.message(Command("settings"))
+async def cmd_settings(message: Message):
+    track_user(message)
+    uid = message.from_user.id
+    interface = get_user_interface(uid)
+    await message.answer(
+        "⚙️ *Настройки бота*\n\n"
+        "Здесь вы можете изменить стиль интерфейса или сменить группу.",
+        parse_mode="Markdown",
+        reply_markup=settings_keyboard(interface)
+    )
+
+@router.callback_query(F.data == "toggle_interface")
+async def on_toggle_interface(call: CallbackQuery):
+    track_callback(call)
+    uid = call.from_user.id
+    current = get_user_interface(uid)
+    new_interface = "compact" if current == "full" else "full"
+    set_user_interface(uid, new_interface)
+    
+    await call.message.edit_reply_markup(reply_markup=settings_keyboard(new_interface))
+    
+    group = get_user_group(uid)
+    await call.message.answer(
+        f"✅ Интерфейс изменен на *{'Компактный' if new_interface == 'compact' else 'Полный'}*!",
+        parse_mode="Markdown",
+        reply_markup=main_menu(has_group=bool(group), user_id=uid, interface=new_interface)
+    )
+    await call.answer()
+
+@router.callback_query(F.data == "change_group_inline")
+async def on_change_group_inline(call: CallbackQuery):
+    track_callback(call)
+    await call.message.answer(
+        CHOOSE_PREFIX,
+        parse_mode="Markdown",
+        reply_markup=group_prefix_keyboard(),
+    )
+    await call.answer()
+
+@router.callback_query(F.data == "about_inline")
+async def on_about_inline(call: CallbackQuery):
+    track_callback(call)
+    await call.message.answer(
+        ABOUT_TEXT,
+        parse_mode="Markdown",
+        reply_markup=about_keyboard(),
+        disable_web_page_preview=True,
+    )
+    await call.answer()
+
+@router.callback_query(F.data == "choose_day_inline")
+async def on_choose_day_inline(call: CallbackQuery):
+    track_callback(call)
+    await call.message.answer(
+        "📅 *Выберите день:*",
+        parse_mode="Markdown",
+        reply_markup=days_keyboard(),
+    )
+    await call.answer()
 
 
 # ===================================================================
@@ -257,11 +332,12 @@ async def on_set_group(call: CallbackQuery):
     group = call.data.split(":", 1)[1]
     uid = call.from_user.id
     set_user_group(uid, group)
+    interface = get_user_interface(uid)
     await call.message.delete()
     await call.message.answer(
         GROUP_SET.format(group=group),
         parse_mode="Markdown",
-        reply_markup=main_menu(has_group=True, user_id=uid),
+        reply_markup=main_menu(has_group=True, user_id=uid, interface=interface),
     )
 
 
@@ -275,9 +351,10 @@ async def schedule_today(message: Message):
     track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
+    interface = get_user_interface(uid)
     if not group:
         await message.answer(NO_GROUP, parse_mode="Markdown",
-                             reply_markup=main_menu(has_group=False, user_id=uid))
+                             reply_markup=main_menu(has_group=False, user_id=uid, interface=interface))
         return
 
     msg = await message.answer(LOADING)
@@ -301,9 +378,10 @@ async def schedule_tomorrow(message: Message):
     track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
+    interface = get_user_interface(uid)
     if not group:
         await message.answer(NO_GROUP, parse_mode="Markdown",
-                             reply_markup=main_menu(has_group=False, user_id=uid))
+                             reply_markup=main_menu(has_group=False, user_id=uid, interface=interface))
         return
 
     msg = await message.answer(LOADING)
@@ -327,9 +405,10 @@ async def schedule_week(message: Message):
     track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
+    interface = get_user_interface(uid)
     if not group:
         await message.answer(NO_GROUP, parse_mode="Markdown",
-                             reply_markup=main_menu(has_group=False, user_id=uid))
+                             reply_markup=main_menu(has_group=False, user_id=uid, interface=interface))
         return
 
     msg = await message.answer("\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u043d\u0435\u0434\u0435\u043b\u044e...\n\u042d\u0442\u043e \u0437\u0430\u0439\u043c\u0451\u0442 \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0441\u0435\u043a\u0443\u043d\u0434 \u23f1")
@@ -362,9 +441,10 @@ async def choose_day(message: Message):
     track_user(message)
     uid = message.from_user.id
     group = get_user_group(uid)
+    interface = get_user_interface(uid)
     if not group:
         await message.answer(NO_GROUP, parse_mode="Markdown",
-                             reply_markup=main_menu(has_group=False, user_id=uid))
+                             reply_markup=main_menu(has_group=False, user_id=uid, interface=interface))
         return
 
     await message.answer(
@@ -542,9 +622,10 @@ async def cmd_cancel(message: Message, state: FSMContext):
     await state.clear()
     uid = message.from_user.id
     group = get_user_group(uid)
+    interface = get_user_interface(uid)
     await message.answer(
         "❌ Действие отменено.",
-        reply_markup=main_menu(has_group=bool(group), user_id=uid)
+        reply_markup=main_menu(has_group=bool(group), user_id=uid, interface=interface)
     )
 
 @router.message(F.text == "⚙️ Панель администратора")
@@ -608,6 +689,7 @@ async def check_admin_password(message: Message, state: FSMContext):
         
         uid = message.from_user.id
         group = get_user_group(uid)
+        interface = get_user_interface(uid)
         
         settings = get_admin_settings()
         notify_status = settings.get("notify_new_users", True)
@@ -622,7 +704,7 @@ async def check_admin_password(message: Message, state: FSMContext):
         await message.answer_document(
             doc, 
             caption="📋 Полный отчет о пользователях бота",
-            reply_markup=main_menu(has_group=bool(group), user_id=uid)
+            reply_markup=main_menu(has_group=bool(group), user_id=uid, interface=interface)
         )
         
         import os
@@ -678,17 +760,19 @@ async def unknown(message: Message):
         if matched_group:
             uid = message.from_user.id
             set_user_group(uid, matched_group)
+            interface = get_user_interface(uid)
             await message.answer(
                 GROUP_SET.format(group=matched_group),
                 parse_mode="Markdown",
-                reply_markup=main_menu(has_group=True, user_id=uid),
+                reply_markup=main_menu(has_group=True, user_id=uid, interface=interface),
             )
             return
 
     uid = message.from_user.id
     group = get_user_group(uid)
+    interface = get_user_interface(uid)
     await message.answer(
         "🤔 Не понял. Если ты хотел выбрать группу, введи её название (например, *ТМ9-23-2*).\nИли используй кнопки меню /help.",
         parse_mode="Markdown",
-        reply_markup=main_menu(has_group=bool(group), user_id=uid),
+        reply_markup=main_menu(has_group=bool(group), user_id=uid, interface=interface),
     )

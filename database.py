@@ -141,6 +141,36 @@ def get_user_group(user_id: int) -> str | None:
     return info  # string or None
 
 
+def get_user_interface(user_id: int) -> str:
+    """Возвращает тип интерфейса пользователя (по умолчанию 'full')."""
+    cache = _get_cache()
+    info = cache.get(str(user_id))
+    if isinstance(info, dict):
+        return info.get("interface", "full")
+    return "full"
+
+
+def set_user_interface(user_id: int, interface_type: str):
+    """Устанавливает тип интерфейса пользователя."""
+    cache = _get_cache()
+    uid_str = str(user_id)
+    info = cache.get(uid_str)
+    
+    if not isinstance(info, dict):
+        info = {
+            "group": info if isinstance(info, str) else None,
+            "joined_at": _get_mgn_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "last_seen": _get_mgn_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "username": None,
+            "first_name": None,
+            "last_name": None
+        }
+    
+    info["interface"] = interface_type
+    cache[uid_str] = info
+    _save(cache)
+
+
 def _sync_user_to_google(user_id: int, info: dict):
     """Отправляет данные пользователя в Google Таблицу в фоновом режиме."""
     from config import GOOGLE_SHEET_URL

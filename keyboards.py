@@ -14,7 +14,7 @@ from config import ALL_GROUPS
 
 # ─── Главное меню ────────────────────────────────────────────────────────────
 
-def main_menu(has_group: bool = False, user_id: int = None) -> ReplyKeyboardMarkup:
+def main_menu(has_group: bool = False, user_id: int = None, interface: str = "full") -> ReplyKeyboardMarkup:
     from config import ADMIN_IDS
     is_admin = user_id in ADMIN_IDS
 
@@ -22,7 +22,15 @@ def main_menu(has_group: bool = False, user_id: int = None) -> ReplyKeyboardMark
         buttons = [
             [KeyboardButton(text="🎓 Выбрать группу")],
         ]
+    elif interface == "compact":
+        buttons = [
+            [KeyboardButton(text="📅 Сегодня"),
+             KeyboardButton(text="📆 Завтра")],
+            [KeyboardButton(text="🗓 Неделя"),
+             KeyboardButton(text="⚙️ Настройки")],
+        ]
     else:
+        # full interface
         buttons = [
             [KeyboardButton(text="📅 Сегодня"),
              KeyboardButton(text="📆 Завтра")],
@@ -30,6 +38,7 @@ def main_menu(has_group: bool = False, user_id: int = None) -> ReplyKeyboardMark
              KeyboardButton(text="📋 Выбрать день")],
             [KeyboardButton(text="🔄 Сменить группу"),
              KeyboardButton(text="ℹ️ О боте")],
+            [KeyboardButton(text="⚙️ Настройки")],
         ]
         
     if is_admin:
@@ -37,6 +46,19 @@ def main_menu(has_group: bool = False, user_id: int = None) -> ReplyKeyboardMark
         buttons.append([KeyboardButton(text="⚙️ Панель администратора")])
         
     return ReplyKeyboardMarkup(keyboard=buttons, resize_keyboard=True)
+
+
+def settings_keyboard(current_interface: str) -> InlineKeyboardMarkup:
+    """Клавиатура настроек."""
+    interface_label = "🖼 Интерфейс: Компактный" if current_interface == "compact" else "🖼 Интерфейс: Полный"
+    
+    buttons = [
+        [InlineKeyboardButton(text=interface_label, callback_data="toggle_interface")],
+        [InlineKeyboardButton(text="🔄 Сменить группу", callback_data="change_group_inline")],
+        [InlineKeyboardButton(text="ℹ️ О боте", callback_data="about_inline")],
+        [InlineKeyboardButton(text="📋 Выбрать конкретный день", callback_data="choose_day_inline")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
 # ─── Выбор группы (inline по префиксам) ─────────────────────────────────────
