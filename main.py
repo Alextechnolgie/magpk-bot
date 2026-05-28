@@ -29,8 +29,10 @@ async def daily_stats_scheduler(bot: Bot):
     logger.info("📅 Планировщик ежедневной статистики запущен!")
     while True:
         try:
-            now = datetime.datetime.now()
-            # Отправка каждый день в 22:00
+            # Текущее время в Магнитогорске (GMT+5)
+            tz = datetime.timezone(datetime.timedelta(hours=5))
+            now = datetime.datetime.now(tz)
+            # Отправка каждый день в 22:00 по Магнитогорску
             target_time = now.replace(hour=22, minute=0, second=0, microsecond=0)
             if now >= target_time:
                 target_time += datetime.timedelta(days=1)
