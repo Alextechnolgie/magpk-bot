@@ -199,17 +199,75 @@ def get_admin_stats() -> str:
 
 
 def generate_users_report() -> str:
-    """Генерирует текстовую таблицу пользователей во временный файл."""
+    """Генерирует красивый Excel-отчет о пользователях."""
     cache = _get_cache()
-    lines = [
-        "ОТЧЕТ ПО ПОЛЬЗОВАТЕЛЯМ БОТА МАГПК РАСПИСАНИЕ",
-        f"Дата генерации: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}",
-        f"Всего пользователей: {len(cache)}",
-        "=" * 120,
-        f"{'ID':<12} | {'Группа':<12} | {'Telegram Аккаунт':<20} | {'Имя Фамилия':<25} | {'Зарегистрирован':<19} | {'Активность':<19}",
-        "=" * 120,
+    
+    from openpyxl import Workbook
+    from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+    
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Пользователи"
+    
+    # Показывать сетку
+    ws.views.sheetView[0].showGridLines = True
+    
+    # Заголовки таблицы
+    headers = [
+        "Telegram ID", 
+        "Группа", 
+        "Telegram Username", 
+        "Имя и Фамилия", 
+        "Зарегистрирован", 
+        "Последняя активность"
     ]
     
+    # Стили
+    font_title = Font(name="Calibri", size=16, bold=True, color="1F497D")
+    font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
+    font_data = Font(name="Calibri", size=11)
+    
+    fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid") # Темно-синий
+    fill_zebra = PatternFill(start_color="F2F5F8", end_color="F2F5F8", fill_type="solid") # Светлый серо-синий
+    
+    align_center = Alignment(horizontal="center", vertical="center")
+    align_left = Alignment(horizontal="left", vertical="center")
+    
+    border_thin = Side(border_style="thin", color="D9D9D9")
+    border_double = Side(border_style="double", color="1F497D")
+    
+    cell_border = Border(left=border_thin, right=border_thin, top=border_thin, bottom=border_thin)
+    header_border = Border(left=border_thin, right=border_thin, top=border_thin, bottom=border_double)
+    
+    # Заголовок отчета
+    ws.merge_cells("A1:F1")
+    title_cell = ws["A1"]
+    title_cell.value = "Отчет по пользователям бота МАГПК Расписание"
+    title_cell.font = font_title
+    title_cell.alignment = align_left
+    ws.row_dimensions[1].height = 40
+    
+    # Инфострока
+    ws.merge_cells("A2:F2")
+    info_cell = ws["A2"]
+    info_cell.value = f"Всего пользователей: {len(cache)}  |  Дата генерации: {datetime.now().strftime('%d.%m.%Y %H:%M:%S')}"
+    info_cell.font = Font(name="Calibri", size=11, italic=True)
+    info_cell.alignment = align_left
+    ws.row_dimensions[2].height = 20
+    
+    # Заголовки (строка 4)
+    ws.row_dimensions[4].height = 28
+    for col_num, header in enumerate(headers, 1):
+        cell = ws.cell(row=4, column=col_num)
+        cell.value = header
+        cell.font = font_header
+        cell.fill = fill_header
+        cell.alignment = align_center
+        cell.border = header_border
+        
+    # Данные (с 5 строки)
+    row_num = 5
     for uid_str, info in cache.items():
         group = ""
         username = ""
@@ -229,9 +287,40 @@ def generate_users_report() -> str:
         else:
             group = info or ""
             
-        lines.append(f"{uid_str:<12} | {group:<12} | {username:<20} | {name:<25} | {joined:<19} | {last_seen:<19}")
+        row_data = [uid_str, group, username, name, joined, last_seen]
         
-    filepath = os.path.join(tempfile.gettempdir(), "users_report.txt")
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write("\n".join(lines))
+        ws.row_dimensions[row_num].height = 20
+        is_even = (row_num % 2 == 0)
+        
+        for col_num, val in enumerate(row_data, 1):
+            cell = ws.cell(row=row_num, column=col_num)
+            cell.value = val
+            cell.font = font_data
+            cell.border = cell_border
+            
+            # Зебра-эффект
+            if is_even:
+                cell.fill = fill_zebra
+                
+            # Выравнивание
+            if col_num in [1, 2, 5, 6]:
+                cell.alignment = align_center
+            else:
+                cell.alignment = align_left
+                
+        row_num += 1
+        
+    # Автоподбор ширины колонок
+    for col in ws.columns:
+        max_len = 0
+        col_letter = get_column_letter(col[0].column)
+        for cell in col:
+            if cell.row in [1, 2]:
+                continue
+            if cell.value:
+                max_len = max(max_len, len(str(cell.value)))
+        ws.column_dimensions[col_letter].width = max(max_len + 4, 12)
+        
+    filepath = os.path.join(tempfile.gettempdir(), "users_report.xlsx")
+    wb.save(filepath)
     return filepath

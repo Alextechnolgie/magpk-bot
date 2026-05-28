@@ -548,7 +548,7 @@ async def check_admin_password(message: Message, state: FSMContext):
             reply_markup=main_menu(has_group=bool(group), user_id=uid)
         )
         
-        doc = FSInputFile(report_file, filename="users_report.txt")
+        doc = FSInputFile(report_file, filename="users_report.xlsx")
         await message.answer_document(doc, caption="📋 Полный отчет о пользователях бота")
         
         import os
