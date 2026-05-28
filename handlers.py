@@ -4,7 +4,7 @@ Handlers for MAGPK Schedule Telegram Bot.
 Full redesign with calendar export and caching.
 """
 
-from datetime import date, timedelta
+from datetime import date, timedelta, datetime
 
 from aiogram import Router, F
 from aiogram.types import Message, CallbackQuery, FSInputFile
@@ -12,6 +12,7 @@ from aiogram.filters import CommandStart, Command
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
+from config import get_mgn_today, get_mgn_now
 from keyboards import (
     main_menu,
     group_prefix_keyboard,
@@ -22,6 +23,7 @@ from keyboards import (
     about_keyboard,
     admin_panel_keyboard,
     settings_keyboard,
+    broadcast_target_keyboard,
 )
 from parser import (
     fetch_schedule,
@@ -358,7 +360,7 @@ async def schedule_today(message: Message):
         return
 
     msg = await message.answer(LOADING)
-    today = date.today()
+    today = get_mgn_today()
     text = await fetch_schedule(group, today, interface=interface)
     lessons = await fetch_schedule_data(group, today)
     g_links = get_google_calendar_lesson_links(group, today, lessons)
@@ -385,7 +387,7 @@ async def schedule_tomorrow(message: Message):
         return
 
     msg = await message.answer(LOADING)
-    tomorrow = date.today() + timedelta(days=1)
+    tomorrow = get_mgn_today() + timedelta(days=1)
     text = await fetch_schedule(group, tomorrow, interface=interface)
     lessons = await fetch_schedule_data(group, tomorrow)
     g_links = get_google_calendar_lesson_links(group, tomorrow, lessons)
@@ -413,7 +415,7 @@ async def schedule_week(message: Message):
 
     msg = await message.answer("\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u043d\u0435\u0434\u0435\u043b\u044e...\n\u042d\u0442\u043e \u0437\u0430\u0439\u043c\u0451\u0442 \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0441\u0435\u043a\u0443\u043d\u0434 \u23f1")
 
-    today = date.today()
+    today = get_mgn_today()
     monday = today - timedelta(days=today.weekday())
     days_texts = await fetch_week_schedule(group, monday, interface=interface)
 
@@ -596,6 +598,9 @@ async def on_export_week(call: CallbackQuery):
 
 class AdminStates(StatesGroup):
     waiting_for_password = State()
+    waiting_for_broadcast_text = State()
+    waiting_for_broadcast_target = State()
+    waiting_for_broadcast_group = State()
 
 @router.message(Command("cancel"))
 @router.message(F.text.lower() == "отмена")
@@ -742,6 +747,165 @@ async def on_toggle_notify(call: CallbackQuery):
     from keyboards import admin_panel_keyboard
     await call.message.edit_reply_markup(reply_markup=admin_panel_keyboard(new_status))
     await call.answer(f"Уведомления {'включены' if new_status else 'выключены'}!", show_alert=False)
+
+# ===================================================================
+#  Broadcast logic
+# ===================================================================
+
+@router.callback_query(F.data == "admin_broadcast")
+async def on_admin_broadcast(call: CallbackQuery, state: FSMContext):
+    track_callback(call)
+    await state.set_state(AdminStates.waiting_for_broadcast_text)
+    await call.message.answer(
+        "📢 *Подготовка рассылки*\n\n"
+        "Введите текст сообщения, которое вы хотите отправить пользователям.\n"
+        "Можно использовать Markdown.",
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+@router.message(AdminStates.waiting_for_broadcast_text)
+async def on_broadcast_text(message: Message, state: FSMContext):
+    track_user(message)
+    await state.update_data(broadcast_text=message.text)
+    await state.set_state(AdminStates.waiting_for_broadcast_target)
+    await message.answer(
+        "🎯 *Кому отправить сообщение?*",
+        parse_mode="Markdown",
+        reply_markup=broadcast_target_keyboard()
+    )
+
+@router.callback_query(F.data == "broadcast_cancel")
+async def on_broadcast_cancel(call: CallbackQuery, state: FSMContext):
+    track_callback(call)
+    await state.clear()
+    uid = call.from_user.id
+    group = get_user_group(uid)
+    interface = get_user_interface(uid)
+    await call.message.edit_text("❌ Рассылка отменена.")
+    await call.message.answer(
+        "Главное меню:",
+        reply_markup=main_menu(has_group=bool(group), user_id=uid, interface=interface)
+    )
+    await call.answer()
+
+@router.callback_query(F.data == "broadcast_target:all")
+async def on_broadcast_all(call: CallbackQuery, state: FSMContext):
+    track_callback(call)
+    data = await state.get_data()
+    text = data.get("broadcast_text")
+    await state.clear()
+    
+    await call.message.edit_text("🚀 *Начинаю глобальную рассылку...*", parse_mode="Markdown")
+    
+    from database import _get_cache
+    cache = _get_cache()
+    uids = [k for k in cache if k != "__settings__"]
+    
+    success, fail = 0, 0
+    for uid_str in uids:
+        try:
+            await call.bot.send_message(chat_id=int(uid_str), text=text, parse_mode="Markdown")
+            success += 1
+            await asyncio.sleep(0.05) # Лимит Telegram
+        except Exception:
+            fail += 1
+            
+    await call.message.answer(
+        f"✅ *Рассылка завершена!*\n\n"
+        f"📈 Успешно: *{success}*\n"
+        f"❌ Ошибок: *{fail}*",
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
+@router.callback_query(F.data == "broadcast_target:group")
+async def on_broadcast_group_step1(call: CallbackQuery, state: FSMContext):
+    track_callback(call)
+    await state.set_state(AdminStates.waiting_for_broadcast_group)
+    
+    # Используем клавиатуру выбора группы, но с другими callback_data
+    from config import ALL_GROUPS
+    prefixes = sorted(set(g[:2] for g in ALL_GROUPS))
+    buttons = []
+    row = []
+    for prefix in prefixes:
+        row.append(InlineKeyboardButton(text=f"📁 {prefix}", callback_data=f"b_prefix:{prefix}"))
+        if len(row) == 3:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    
+    await call.message.edit_text(
+        "🎓 *Выберите группу для рассылки:*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await call.answer()
+
+@router.callback_query(F.data.startswith("b_prefix:"))
+async def on_broadcast_prefix(call: CallbackQuery):
+    track_callback(call)
+    prefix = call.data.split(":", 1)[1]
+    from config import ALL_GROUPS
+    groups = [g for g in ALL_GROUPS if g.startswith(prefix)]
+    buttons = []
+    row = []
+    for g in groups:
+        row.append(InlineKeyboardButton(text=g, callback_data=f"b_setgroup:{g}"))
+        if len(row) == 3:
+            buttons.append(row)
+            row = []
+    if row:
+        buttons.append(row)
+    
+    await call.message.edit_text(
+        f"🎓 *Группы на «{prefix}» для рассылки:*",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons)
+    )
+    await call.answer()
+
+@router.callback_query(F.data.startswith("b_setgroup:"))
+async def on_broadcast_group_execute(call: CallbackQuery, state: FSMContext):
+    track_callback(call)
+    target_group = call.data.split(":", 1)[1]
+    data = await state.get_data()
+    text = data.get("broadcast_text")
+    await state.clear()
+    
+    await call.message.edit_text(f"🚀 *Рассылка для группы {target_group}...*", parse_mode="Markdown")
+    
+    from database import _get_cache
+    cache = _get_cache()
+    
+    target_uids = []
+    for uid_str, info in cache.items():
+        if uid_str == "__settings__": continue
+        if isinstance(info, dict) and info.get("group") == target_group:
+            target_uids.append(uid_str)
+        elif isinstance(info, str) and info == target_group:
+            target_uids.append(uid_str)
+            
+    success, fail = 0, 0
+    for uid_str in target_uids:
+        try:
+            await call.bot.send_message(chat_id=int(uid_str), text=text, parse_mode="Markdown")
+            success += 1
+            await asyncio.sleep(0.05)
+        except Exception:
+            fail += 1
+            
+    await call.message.answer(
+        f"✅ *Рассылка завершена!*\n\n"
+        f"👥 Группа: *{target_group}*\n"
+        f"📈 Успешно: *{success}*\n"
+        f"❌ Ошибок: *{fail}*",
+        parse_mode="Markdown"
+    )
+    await call.answer()
+
 
 # ===================================================================
 #  Unknown message

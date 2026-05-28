@@ -101,7 +101,7 @@ def _clean_hall(hall_str: str) -> str:
     return hall_str
 
 
-def _parse_html(html: str) -> list[dict] | None:
+def _parse_html(html: str, target_date: date = None) -> list[dict] | None:
     """
     Парсит HTML и возвращает список уроков или None если блок не найден.
     Пустой список = занятий нет.
@@ -115,6 +115,17 @@ def _parse_html(html: str) -> list[dict] | None:
         if "занятий нет" in body_text or "нет занятий" in body_text or "выходной" in body_text:
             return []  # Пустой = выходной
         return None  # None = данных нет вообще
+
+    # Проверка даты в заголовке внутри блока (если передана ожидаемая дата)
+    if target_date:
+        expected_date_str = target_date.strftime("%d.%m.%Y")
+        timetable_text = timetable_div.get_text(" ", strip=True)
+        # Сайт обычно пишет: "Пятница (29.05.2026)"
+        if expected_date_str not in timetable_text:
+            logger.warning(f"⚠️ Дата в HTML ({timetable_text[:30]}...) не совпадает с ожидаемой ({expected_date_str})")
+            # Если на сайте всё еще висит старое расписание (вчерашнее), 
+            # мы НЕ должны считать это расписанием на сегодня.
+            return None
 
     periods = timetable_div.find_all("ul", class_="timetable__period")
     if not periods:
@@ -226,12 +237,15 @@ async def _get_lessons(group: str, target_date: date) -> list[dict] | None | str
         return html  # Ошибка сети — не кэшируем
 
     # 3. Парсим
-    lessons = _parse_html(html)
+    lessons = _parse_html(html, target_date)
 
     # 4. Кэшируем
     _cache_set(group, target_date, lessons)
 
     return lessons
+
+# Trigger cache clear on reload
+_cache.clear()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

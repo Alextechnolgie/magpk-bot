@@ -47,6 +47,17 @@ WEEKDAYS_RU = {
 
 # Администрирование бота
 import os
+from datetime import datetime, timedelta, timezone, date
+
+def get_mgn_now() -> datetime:
+    """Возвращает текущее время в Магнитогорске (GMT+5)."""
+    tz = timezone(timedelta(hours=5))
+    return datetime.now(tz)
+
+def get_mgn_today() -> date:
+    """Возвращает текущую дату в Магнитогорске (GMT+5)."""
+    return get_mgn_now().date()
+
 ADMIN_IDS = [8510857913]
 env_admin_ids = os.getenv("ADMIN_IDS")
 if env_admin_ids:

@@ -102,9 +102,9 @@ def groups_by_prefix_keyboard(prefix: str) -> InlineKeyboardMarkup:
 # ─── Выбор дня для расписания ────────────────────────────────────────────────
 
 def days_keyboard() -> InlineKeyboardMarkup:
-    from datetime import date, timedelta
-    from config import WEEKDAYS_RU
-    today = date.today()
+    from datetime import timedelta
+    from config import WEEKDAYS_RU, get_mgn_today
+    today = get_mgn_today()
     buttons = []
     for i in range(7):
         d = today + timedelta(days=i)
@@ -180,6 +180,17 @@ def admin_panel_keyboard(notify_status: bool) -> InlineKeyboardMarkup:
     """Клавиатура управления уведомлениями в панели администратора."""
     label = "🔔 Уведомления о новых: ВКЛ" if notify_status else "🔕 Уведомления о новых: ВЫКЛ"
     buttons = [
-        [InlineKeyboardButton(text=label, callback_data="toggle_notify")]
+        [InlineKeyboardButton(text=label, callback_data="toggle_notify")],
+        [InlineKeyboardButton(text="📢 Рассылка сообщения", callback_data="admin_broadcast")],
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def broadcast_target_keyboard() -> InlineKeyboardMarkup:
+    """Выбор цели для рассылки."""
+    buttons = [
+        [InlineKeyboardButton(text="👥 Всем пользователям", callback_data="broadcast_target:all")],
+        [InlineKeyboardButton(text="🎓 Конкретной группе", callback_data="broadcast_target:group")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)

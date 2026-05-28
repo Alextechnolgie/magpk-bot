@@ -4,11 +4,7 @@ import tempfile
 import base64
 import shutil
 from datetime import datetime, timedelta, timezone
-
-def _get_mgn_now() -> datetime:
-    """Возвращает текущее время в Магнитогорске (GMT+5) без информации о таймзоне для совместимости."""
-    tz = timezone(timedelta(hours=5))
-    return datetime.now(tz).replace(tzinfo=None)
+from config import get_mgn_now
 
 # Если папка /data существует (например, в Docker или Railway Volume), используем её.
 # Иначе используем текущую директорию.
@@ -224,8 +220,8 @@ def set_user_interface(user_id: int, interface_type: str):
     if not isinstance(info, dict):
         info = {
             "group": info if isinstance(info, str) else None,
-            "joined_at": _get_mgn_now().strftime("%Y-%m-%d %H:%M:%S"),
-            "last_seen": _get_mgn_now().strftime("%Y-%m-%d %H:%M:%S"),
+            "joined_at": get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
+            "last_seen": get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
             "username": None,
             "first_name": None,
             "last_name": None
@@ -275,7 +271,7 @@ def set_user_group(user_id: int, group: str):
     uid_str = str(user_id)
     info = cache.get(uid_str)
     
-    now_str = _get_mgn_now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
     
     if isinstance(info, dict):
         info["group"] = group
@@ -300,7 +296,7 @@ def update_user_activity(user_id: int, username: str | None, first_name: str | N
     uid_str = str(user_id)
     is_new = uid_str not in cache
     
-    now_str = _get_mgn_now().strftime("%Y-%m-%d %H:%M:%S")
+    now_str = get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
     
     info = cache.get(uid_str)
     if isinstance(info, dict):
@@ -367,7 +363,7 @@ def get_admin_stats() -> str:
     cache = _get_cache()
     total_users = sum(1 for k in cache if k != "__settings__")
     
-    now = _get_mgn_now()
+    now = get_mgn_now().replace(tzinfo=None)
     today_start = datetime(now.year, now.month, now.day)
     seven_days_ago = today_start - timedelta(days=7)
     thirty_days_ago = today_start - timedelta(days=30)
@@ -469,7 +465,7 @@ def generate_users_report() -> str:
     # Инфострока
     ws.merge_cells("A2:F2")
     info_cell = ws["A2"]
-    info_cell.value = f"Всего пользователей: {total_users}  |  Дата генерации: {_get_mgn_now().strftime('%d.%m.%Y %H:%M:%S')}"
+    info_cell.value = f"Всего пользователей: {total_users}  |  Дата генерации: {get_mgn_now().replace(tzinfo=None).strftime('%d.%m.%Y %H:%M:%S')}"
     info_cell.font = Font(name="Calibri", size=11, italic=True)
     info_cell.alignment = align_left
     ws.row_dimensions[2].height = 20
