@@ -533,7 +533,12 @@ async def cmd_admin(message: Message):
     is_admin = (uid in ADMIN_IDS) or (password_entered == ADMIN_PASSWORD)
     
     if not is_admin:
-        await message.answer("❌ Доступ ограничен. Вы не являетесь администратором.")
+        await message.answer(
+            f"❌ Доступ ограничен. Ваш Telegram ID: `{uid}`.\n"
+            f"Для входа используйте команду с паролем: `/admin ВашПароль`\n"
+            f"или добавьте этот ID в список администраторов.",
+            parse_mode="Markdown"
+        )
         return
         
     from database import get_admin_stats, generate_users_report
