@@ -102,10 +102,67 @@ def generate_ics(
             location = room if room else "МАГПК"
 
             # Формируем событие
-            uid = _make_uid(group, target_date, i)
             now = datetime.utcnow().strftime("%Y%m%dT%H%M%SZ")
             
-            event = f"""BEGIN:VEVENT
+            # Проверяем длительность пары для разделения на две части по 45 минут с 5-минутной переменой
+            duration_mins = int((dtend - dtstart).total_seconds() / 60)
+            if duration_mins >= 50:
+                # Первая половина (45 минут)
+                dtstart_1 = dtstart
+                dtend_1 = dtstart + timedelta(minutes=45)
+                uid_1 = _make_uid(group, target_date, f"{i}-part1")
+                
+                event_1 = f"""BEGIN:VEVENT
+UID:{uid_1}
+DTSTAMP:{now}
+DTSTART;TZID=Asia/Yekaterinburg:{dtstart_1.strftime("%Y%m%dT%H%M%S")}
+DTEND;TZID=Asia/Yekaterinburg:{dtend_1.strftime("%Y%m%dT%H%M%S")}
+SUMMARY:{_escape_ics(subject)} (1/2)
+DESCRIPTION:{description}\\nЧасть 1 из 2
+LOCATION:{_escape_ics(location)}
+BEGIN:VALARM
+TRIGGER:-PT60M
+ACTION:DISPLAY
+DESCRIPTION:Через 1 час: {_escape_ics(subject)} (1/2)
+END:VALARM
+END:VEVENT"""
+                all_events.append(event_1)
+
+                # Внутрипарная перемена (5 минут)
+                dtstart_break = dtstart + timedelta(minutes=45)
+                dtend_break = dtstart + timedelta(minutes=50)
+                uid_break = _make_uid(group, target_date, f"{i}-break5")
+                
+                break_event = f"""BEGIN:VEVENT
+UID:{uid_break}
+DTSTAMP:{now}
+DTSTART;TZID=Asia/Yekaterinburg:{dtstart_break.strftime("%Y%m%dT%H%M%S")}
+DTEND;TZID=Asia/Yekaterinburg:{dtend_break.strftime("%Y%m%dT%H%M%S")}
+SUMMARY:☕️ Перемена (5 мин)
+DESCRIPTION:Перерыв внутри пары
+LOCATION:{_escape_ics(location)}
+END:VEVENT"""
+                all_events.append(break_event)
+
+                # Вторая половина
+                dtstart_2 = dtstart + timedelta(minutes=50)
+                dtend_2 = dtend
+                uid_2 = _make_uid(group, target_date, f"{i}-part2")
+                
+                event_2 = f"""BEGIN:VEVENT
+UID:{uid_2}
+DTSTAMP:{now}
+DTSTART;TZID=Asia/Yekaterinburg:{dtstart_2.strftime("%Y%m%dT%H%M%S")}
+DTEND;TZID=Asia/Yekaterinburg:{dtend_2.strftime("%Y%m%dT%H%M%S")}
+SUMMARY:{_escape_ics(subject)} (2/2)
+DESCRIPTION:{description}\\nЧасть 2 из 2
+LOCATION:{_escape_ics(location)}
+END:VEVENT"""
+                all_events.append(event_2)
+            else:
+                # Обычное событие, если пара короткая
+                uid = _make_uid(group, target_date, i)
+                event = f"""BEGIN:VEVENT
 UID:{uid}
 DTSTAMP:{now}
 DTSTART;TZID=Asia/Yekaterinburg:{dtstart.strftime("%Y%m%dT%H%M%S")}
@@ -118,13 +175,8 @@ TRIGGER:-PT60M
 ACTION:DISPLAY
 DESCRIPTION:Через 1 час: {_escape_ics(subject)}
 END:VALARM
-BEGIN:VALARM
-TRIGGER:-PT15M
-ACTION:DISPLAY
-DESCRIPTION:Через 15 минут: {_escape_ics(subject)}
-END:VALARM
 END:VEVENT"""
-            all_events.append(event)
+                all_events.append(event)
 
             # Добавляем перемену перед следующей парой
             if i < len(lessons):
@@ -143,10 +195,8 @@ END:VEVENT"""
                         t2 = datetime.strptime(next_start, fmt)
                         diff = int((t2 - t1).total_seconds() / 60)
                         
-                        if 0 < diff <= 60:
+                        if 0 < diff <= 20:
                             label = "☕️ Перемена"
-                            if diff >= 20:
-                                label = "🍱 Большая перемена"
                             
                             b_start_h, b_start_m = map(int, curr_end.split(":"))
                             b_end_h, b_end_m = map(int, next_start.split(":"))
@@ -154,7 +204,7 @@ END:VEVENT"""
                             b_dtstart = datetime(target_date.year, target_date.month, target_date.day, b_start_h, b_start_m)
                             b_dtend = datetime(target_date.year, target_date.month, target_date.day, b_end_h, b_end_m)
                             
-                            b_uid = f"break-{uid}-{i}"
+                            b_uid = _make_uid(group, target_date, f"{i}-interbreak")
                             break_event = f"""BEGIN:VEVENT
 UID:{b_uid}
 DTSTAMP:{now}

@@ -311,10 +311,8 @@ def _get_break_info(end_time: str, start_time: str) -> str | None:
         t1 = time.strptime(end_time, fmt)
         t2 = time.strptime(start_time, fmt)
         diff = (t2.tm_hour * 60 + t2.tm_min) - (t1.tm_hour * 60 + t1.tm_min)
-        if 0 < diff <= 60:
+        if 0 < diff <= 20:
             label = "☕️ Перемена"
-            if diff >= 20:
-                label = "🍱 Большая перемена"
             return f"    _{label} — {diff} мин._"
     except:
         pass
