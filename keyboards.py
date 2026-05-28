@@ -140,7 +140,12 @@ def week_calendar_keyboard(monday_iso: str) -> InlineKeyboardMarkup:
 
 def about_keyboard() -> InlineKeyboardMarkup:
     """Клавиатура для раздела 'О боте'."""
+    from config import DONATE_LINK
     buttons = [
+        [InlineKeyboardButton(
+            text="☕️ Поддержать проект (СБП)",
+            url=DONATE_LINK
+        )],
         [InlineKeyboardButton(
             text="💬 Написать автору",
             url="https://t.me/Ishmametyev"
