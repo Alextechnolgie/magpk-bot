@@ -1,0 +1,403 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# Script to write handlers.py with proper UTF-8 encoding
+import pathlib
+
+code = r'''# -*- coding: utf-8 -*-
+"""
+Handlers for MAGPK Schedule Telegram Bot.
+Full redesign with calendar export and caching.
+"""
+
+from datetime import date, timedelta
+
+from aiogram import Router, F
+from aiogram.types import Message, CallbackQuery, FSInputFile
+from aiogram.filters import CommandStart, Command
+
+from keyboards import (
+    main_menu,
+    group_prefix_keyboard,
+    groups_by_prefix_keyboard,
+    days_keyboard,
+    calendar_button,
+    about_keyboard,
+)
+from parser import (
+    fetch_schedule,
+    fetch_schedule_data,
+    fetch_week_schedule,
+    cache_stats,
+)
+from calendar_export import generate_ics_for_day
+from database import get_user_group, set_user_group
+
+router = Router()
+
+# ===================================================================
+#  TEXTS
+# ===================================================================
+
+WELCOME_NEW = (
+    "\U0001f44b *\u041f\u0440\u0438\u0432\u0435\u0442!*\n\n"
+    "\u042f \u2014 \u0431\u043e\u0442 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u044f *\u041c\u0410\u0413\u041f\u041a*.\n"
+    "\u041f\u043e\u043a\u0430\u0436\u0443 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0437\u0430\u043d\u044f\u0442\u0438\u0439 \u0431\u044b\u0441\u0442\u0440\u043e \u0438 \u0443\u0434\u043e\u0431\u043d\u043e! \U0001f680\n\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+    "\U0001f393 *\u0414\u043b\u044f \u043d\u0430\u0447\u0430\u043b\u0430 \u0432\u044b\u0431\u0435\u0440\u0438 \u0441\u0432\u043e\u044e \u0433\u0440\u0443\u043f\u043f\u0443:*"
+)
+
+WELCOME_BACK = (
+    "\U0001f44b *\u0421 \u0432\u043e\u0437\u0432\u0440\u0430\u0449\u0435\u043d\u0438\u0435\u043c!*\n\n"
+    "\U0001f465 \u0413\u0440\u0443\u043f\u043f\u0430: *{group}*\n\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u0412\u044b\u0431\u0438\u0440\u0430\u0439, \u0447\u0442\u043e \u043f\u043e\u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \U0001f447"
+)
+
+CHOOSE_PREFIX = (
+    "\U0001f393 *\u0412\u044b\u0431\u043e\u0440 \u0433\u0440\u0443\u043f\u043f\u044b*\n\n"
+    "\u041d\u0430\u0436\u043c\u0438 \u043d\u0430 *\u043f\u0435\u0440\u0432\u044b\u0435 \u0431\u0443\u043a\u0432\u044b* \u0441\u0432\u043e\u0435\u0439 \u0433\u0440\u0443\u043f\u043f\u044b \U0001f447"
+)
+
+CHOOSE_GROUP = (
+    "\U0001f393 *\u0413\u0440\u0443\u043f\u043f\u044b \u043d\u0430 \u00ab{prefix}\u00bb:*\n\n"
+    "\u0412\u044b\u0431\u0435\u0440\u0438 \u0441\u0432\u043e\u044e \u0433\u0440\u0443\u043f\u043f\u0443 \U0001f447"
+)
+
+GROUP_SET = (
+    "\u2705 *\u0413\u0440\u0443\u043f\u043f\u0430 \u0443\u0441\u0442\u0430\u043d\u043e\u0432\u043b\u0435\u043d\u0430!*\n\n"
+    "\U0001f465 \u0422\u0432\u043e\u044f \u0433\u0440\u0443\u043f\u043f\u0430: *{group}*\n\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u0422\u0435\u043f\u0435\u0440\u044c \u043c\u043e\u0436\u0435\u0448\u044c \u0441\u043c\u043e\u0442\u0440\u0435\u0442\u044c \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435! \U0001f447"
+)
+
+NO_GROUP = (
+    "\u26a0\ufe0f *\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0432\u044b\u0431\u0435\u0440\u0438 \u0433\u0440\u0443\u043f\u043f\u0443!*\n\n"
+    "\u041d\u0430\u0436\u043c\u0438 \U0001f393 *\u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443* \U0001f447"
+)
+
+LOADING = "\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435..."
+
+ABOUT_TEXT = (
+    "\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n"
+    "  \u2139\ufe0f  *\u041e \u0431\u043e\u0442\u0435 \u041c\u0410\u0413\u041f\u041a \u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435*\n"
+    "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\n"
+    "\U0001f4f1 \u0411\u043e\u0442 \u043f\u043e\u043a\u0430\u0437\u044b\u0432\u0430\u0435\u0442 \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0437\u0430\u043d\u044f\u0442\u0438\u0439\n"
+    "\u041c\u0430\u0433\u043d\u0438\u0442\u043e\u0433\u043e\u0440\u0441\u043a\u043e\u0433\u043e \u043f\u043e\u043b\u0438\u0442\u0435\u0445\u043d\u0438\u0447\u0435\u0441\u043a\u043e\u0433\u043e\n"
+    "\u043a\u043e\u043b\u043b\u0435\u0434\u0436\u0430 \u2014 \u0431\u044b\u0441\u0442\u0440\u043e \u0438 \u0443\u0434\u043e\u0431\u043d\u043e.\n\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+    "\U0001f4ca *\u0412\u043e\u0437\u043c\u043e\u0436\u043d\u043e\u0441\u0442\u0438:*\n"
+    "  \u2022 \u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u0441\u0435\u0433\u043e\u0434\u043d\u044f / \u0437\u0430\u0432\u0442\u0440\u0430\n"
+    "  \u2022 \u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u0432\u0441\u044e \u043d\u0435\u0434\u0435\u043b\u044e\n"
+    "  \u2022 \U0001f4f2 \u042d\u043a\u0441\u043f\u043e\u0440\u0442 \u0432 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c (iOS/Android)\n\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+    "\U0001f468\u200d\U0001f4bb *\u0420\u0430\u0437\u0440\u0430\u0431\u043e\u0442\u0447\u0438\u043a:* @Alextechnolgie\n\n"
+    "\u26a0\ufe0f *\u0414\u0438\u0441\u043a\u043b\u0435\u0439\u043c\u0435\u0440:*\n"
+    "\u042d\u0442\u043e _\u043d\u0435\u043e\u0444\u0438\u0446\u0438\u0430\u043b\u044c\u043d\u044b\u0439_ \u0431\u043e\u0442. \u0414\u0430\u043d\u043d\u044b\u0435 \u0431\u0435\u0440\u0443\u0442\u0441\u044f\n"
+    "\u0441 \u0441\u0430\u0439\u0442\u0430 [magpk.ru](https://magpk.ru) \u0432 \u0440\u0435\u0430\u043b\u044c\u043d\u043e\u043c \u0432\u0440\u0435\u043c\u0435\u043d\u0438.\n"
+    "\u0410\u0432\u0442\u043e\u0440 \u043d\u0435 \u043d\u0435\u0441\u0451\u0442 \u043e\u0442\u0432\u0435\u0442\u0441\u0442\u0432\u0435\u043d\u043d\u043e\u0441\u0442\u0438 \u0437\u0430\n"
+    "\u0442\u043e\u0447\u043d\u043e\u0441\u0442\u044c \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u044f.\n\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n"
+    "\u0412\u0435\u0440\u0441\u0438\u044f 2.0 \u2022 2026"
+)
+
+HELP_TEXT = (
+    "\u250c\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2510\n"
+    "  \U0001f4d6  *\u0421\u043f\u0440\u0430\u0432\u043a\u0430*\n"
+    "\u2514\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2518\n\n"
+    "*\u041a\u043e\u043c\u0430\u043d\u0434\u044b:*\n"
+    "/start \u2014 \u041d\u0430\u0447\u0430\u043b\u043e \u0440\u0430\u0431\u043e\u0442\u044b\n"
+    "/today \u2014 \u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u0441\u0435\u0433\u043e\u0434\u043d\u044f\n"
+    "/tomorrow \u2014 \u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u0437\u0430\u0432\u0442\u0440\u0430\n"
+    "/week \u2014 \u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u043d\u0435\u0434\u0435\u043b\u044e\n"
+    "/group \u2014 \u0421\u043c\u0435\u043d\u0438\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443\n"
+    "/about \u2014 \u041e \u0431\u043e\u0442\u0435 \u0438 \u043f\u043e\u0434\u0434\u0435\u0440\u0436\u043a\u0430\n"
+    "/help \u2014 \u042d\u0442\u0430 \u0441\u043f\u0440\u0430\u0432\u043a\u0430\n\n"
+    "\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\n\n"
+    "\U0001f4f2 \u041f\u043e\u0441\u043b\u0435 \u043f\u043e\u043b\u0443\u0447\u0435\u043d\u0438\u044f \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u044f \u043d\u0430\u0436\u043c\u0438\n"
+    "*\u00ab\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c\u00bb* \u0447\u0442\u043e\u0431\u044b\n"
+    "\u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u0430\u0440\u044b \u0432 \u0441\u0432\u043e\u0439 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c!"
+)
+
+
+# ===================================================================
+#  /start
+# ===================================================================
+
+@router.message(CommandStart())
+async def cmd_start(message: Message):
+    uid = message.from_user.id
+    group = get_user_group(uid)
+    if group:
+        await message.answer(
+            WELCOME_BACK.format(group=group),
+            parse_mode="Markdown",
+            reply_markup=main_menu(has_group=True),
+        )
+    else:
+        await message.answer(
+            WELCOME_NEW,
+            parse_mode="Markdown",
+            reply_markup=main_menu(has_group=False),
+        )
+
+
+# ===================================================================
+#  /help
+# ===================================================================
+
+@router.message(Command("help"))
+async def cmd_help(message: Message):
+    await message.answer(HELP_TEXT, parse_mode="Markdown", disable_web_page_preview=True)
+
+
+# ===================================================================
+#  /about
+# ===================================================================
+
+@router.message(Command("about"))
+@router.message(Command("support"))
+@router.message(F.text == "\u2139\ufe0f \u041e \u0431\u043e\u0442\u0435")
+async def cmd_about(message: Message):
+    await message.answer(
+        ABOUT_TEXT,
+        parse_mode="Markdown",
+        reply_markup=about_keyboard(),
+        disable_web_page_preview=True,
+    )
+
+
+# ===================================================================
+#  Group selection
+# ===================================================================
+
+@router.message(F.text.in_(["\U0001f393 \u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443", "\U0001f504 \u0421\u043c\u0435\u043d\u0438\u0442\u044c \u0433\u0440\u0443\u043f\u043f\u0443"]))
+@router.message(Command("group"))
+async def choose_group(message: Message):
+    await message.answer(
+        CHOOSE_PREFIX,
+        parse_mode="Markdown",
+        reply_markup=group_prefix_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("prefix:"))
+async def on_prefix(call: CallbackQuery):
+    prefix = call.data.split(":", 1)[1]
+    await call.message.edit_text(
+        CHOOSE_GROUP.format(prefix=prefix),
+        parse_mode="Markdown",
+        reply_markup=groups_by_prefix_keyboard(prefix),
+    )
+
+
+@router.callback_query(F.data == "back_prefix")
+async def on_back_prefix(call: CallbackQuery):
+    await call.message.edit_text(
+        CHOOSE_PREFIX,
+        parse_mode="Markdown",
+        reply_markup=group_prefix_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("setgroup:"))
+async def on_set_group(call: CallbackQuery):
+    group = call.data.split(":", 1)[1]
+    uid = call.from_user.id
+    set_user_group(uid, group)
+    await call.message.delete()
+    await call.message.answer(
+        GROUP_SET.format(group=group),
+        parse_mode="Markdown",
+        reply_markup=main_menu(has_group=True),
+    )
+
+
+# ===================================================================
+#  Schedule today
+# ===================================================================
+
+@router.message(F.text == "\U0001f4c5 \u0421\u0435\u0433\u043e\u0434\u043d\u044f")
+@router.message(Command("today"))
+async def schedule_today(message: Message):
+    uid = message.from_user.id
+    group = get_user_group(uid)
+    if not group:
+        await message.answer(NO_GROUP, parse_mode="Markdown",
+                             reply_markup=main_menu(has_group=False))
+        return
+
+    msg = await message.answer(LOADING)
+    today = date.today()
+    text = await fetch_schedule(group, today)
+    await msg.edit_text(text, parse_mode="Markdown",
+                        disable_web_page_preview=True,
+                        reply_markup=calendar_button(today.isoformat()))
+
+
+# ===================================================================
+#  Schedule tomorrow
+# ===================================================================
+
+@router.message(F.text == "\U0001f4c6 \u0417\u0430\u0432\u0442\u0440\u0430")
+@router.message(Command("tomorrow"))
+async def schedule_tomorrow(message: Message):
+    uid = message.from_user.id
+    group = get_user_group(uid)
+    if not group:
+        await message.answer(NO_GROUP, parse_mode="Markdown",
+                             reply_markup=main_menu(has_group=False))
+        return
+
+    msg = await message.answer(LOADING)
+    tomorrow = date.today() + timedelta(days=1)
+    text = await fetch_schedule(group, tomorrow)
+    await msg.edit_text(text, parse_mode="Markdown",
+                        disable_web_page_preview=True,
+                        reply_markup=calendar_button(tomorrow.isoformat()))
+
+
+# ===================================================================
+#  Schedule week
+# ===================================================================
+
+@router.message(F.text == "\U0001f5d3 \u041d\u0435\u0434\u0435\u043b\u044f")
+@router.message(Command("week"))
+async def schedule_week(message: Message):
+    uid = message.from_user.id
+    group = get_user_group(uid)
+    if not group:
+        await message.answer(NO_GROUP, parse_mode="Markdown",
+                             reply_markup=main_menu(has_group=False))
+        return
+
+    msg = await message.answer("\u23f3 \u0417\u0430\u0433\u0440\u0443\u0436\u0430\u044e \u0440\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u043d\u0430 \u043d\u0435\u0434\u0435\u043b\u044e...\n\u042d\u0442\u043e \u0437\u0430\u0439\u043c\u0451\u0442 \u043d\u0435\u0441\u043a\u043e\u043b\u044c\u043a\u043e \u0441\u0435\u043a\u0443\u043d\u0434 \u23f1")
+
+    today = date.today()
+    monday = today - timedelta(days=today.weekday())
+    days_texts = await fetch_week_schedule(group, monday)
+
+    await msg.delete()
+    for i, text in enumerate(days_texts):
+        day_offset = i
+        day = monday + timedelta(days=day_offset)
+        while day.weekday() == 6:
+            day_offset += 1
+            day = monday + timedelta(days=day_offset)
+        await message.answer(text, parse_mode="Markdown",
+                             disable_web_page_preview=True,
+                             reply_markup=calendar_button(day.isoformat()))
+
+
+# ===================================================================
+#  Choose specific day
+# ===================================================================
+
+@router.message(F.text == "\U0001f4cb \u0412\u044b\u0431\u0440\u0430\u0442\u044c \u0434\u0435\u043d\u044c")
+async def choose_day(message: Message):
+    uid = message.from_user.id
+    group = get_user_group(uid)
+    if not group:
+        await message.answer(NO_GROUP, parse_mode="Markdown",
+                             reply_markup=main_menu(has_group=False))
+        return
+
+    await message.answer(
+        "\U0001f4cb *\u0412\u044b\u0431\u0435\u0440\u0438 \u0434\u0435\u043d\u044c:*",
+        parse_mode="Markdown",
+        reply_markup=days_keyboard(),
+    )
+
+
+@router.callback_query(F.data.startswith("day:"))
+async def on_day_select(call: CallbackQuery):
+    date_str = call.data.split(":", 1)[1]
+    uid = call.from_user.id
+    group = get_user_group(uid)
+    if not group:
+        await call.answer("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0432\u044b\u0431\u0435\u0440\u0438 \u0433\u0440\u0443\u043f\u043f\u0443!", show_alert=True)
+        return
+
+    await call.message.edit_text(LOADING)
+    target_date = date.fromisoformat(date_str)
+    text = await fetch_schedule(group, target_date)
+    await call.message.edit_text(text, parse_mode="Markdown",
+                                 disable_web_page_preview=True,
+                                 reply_markup=calendar_button(target_date.isoformat()))
+
+
+# ===================================================================
+#  Calendar export (.ics)
+# ===================================================================
+
+@router.callback_query(F.data.startswith("export_cal:"))
+async def on_export_calendar(call: CallbackQuery):
+    date_str = call.data.split(":", 1)[1]
+    uid = call.from_user.id
+    group = get_user_group(uid)
+
+    if not group:
+        await call.answer("\u0421\u043d\u0430\u0447\u0430\u043b\u0430 \u0432\u044b\u0431\u0435\u0440\u0438 \u0433\u0440\u0443\u043f\u043f\u0443!", show_alert=True)
+        return
+
+    target_date = date.fromisoformat(date_str)
+
+    # Data from cache if already loaded!
+    lessons = await fetch_schedule_data(group, target_date)
+
+    if not lessons:
+        await call.answer("\U0001f4ed \u041d\u0435\u0442 \u0437\u0430\u043d\u044f\u0442\u0438\u0439 \u0434\u043b\u044f \u044d\u043a\u0441\u043f\u043e\u0440\u0442\u0430!", show_alert=True)
+        return
+
+    filepath = generate_ics_for_day(group, target_date, lessons)
+
+    if not filepath:
+        await call.answer("\u274c \u041d\u0435 \u0443\u0434\u0430\u043b\u043e\u0441\u044c \u0441\u043e\u0437\u0434\u0430\u0442\u044c \u0444\u0430\u0439\u043b", show_alert=True)
+        return
+
+    await call.answer("\U0001f4f2 \u0421\u043e\u0437\u0434\u0430\u044e \u0444\u0430\u0439\u043b \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044f...")
+
+    doc = FSInputFile(filepath, filename=f"\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435_{group}_{date_str}.ics")
+    from config import WEEKDAYS_RU
+    day_name = WEEKDAYS_RU[target_date.weekday()]
+    date_fmt = target_date.strftime("%d.%m.%Y")
+    count = len(lessons)
+    word = "\u043f\u0430\u0440\u0430" if count == 1 else ("\u043f\u0430\u0440\u044b" if 2 <= count <= 4 else "\u043f\u0430\u0440")
+
+    caption = (
+        f"\U0001f4f2 *\u0420\u0430\u0441\u043f\u0438\u0441\u0430\u043d\u0438\u0435 \u0434\u043b\u044f \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044f*\n\n"
+        f"\U0001f465 {group}  \u2022  {day_name}, {date_fmt}\n"
+        f"\U0001f4ca {count} {word}\n\n"
+        f"_\u041e\u0442\u043a\u0440\u043e\u0439 \u0444\u0430\u0439\u043b \u2014 \u043e\u043d \u0430\u0432\u0442\u043e\u043c\u0430\u0442\u0438\u0447\u0435\u0441\u043a\u0438\n"
+        f"\u0434\u043e\u0431\u0430\u0432\u0438\u0442\u0441\u044f \u0432 \u0442\u0432\u043e\u0439 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c!_\n\n"
+        f"\u2705 \u0420\u0430\u0431\u043e\u0442\u0430\u0435\u0442 \u043d\u0430 iOS, Android, Windows"
+    )
+
+    await call.message.answer_document(
+        doc,
+        caption=caption,
+        parse_mode="Markdown",
+    )
+
+    import os
+    try:
+        os.remove(filepath)
+    except OSError:
+        pass
+
+
+# ===================================================================
+#  Unknown message
+# ===================================================================
+
+@router.message()
+async def unknown(message: Message):
+    uid = message.from_user.id
+    group = get_user_group(uid)
+    await message.answer(
+        "\U0001f914 \u041d\u0435 \u043f\u043e\u043d\u044f\u043b. \u0418\u0441\u043f\u043e\u043b\u044c\u0437\u0443\u0439 \u043a\u043d\u043e\u043f\u043a\u0438 \u043c\u0435\u043d\u044e \u0438\u043b\u0438 /help",
+        reply_markup=main_menu(has_group=bool(group)),
+    )
+'''
+
+pathlib.Path(r'C:\Users\alexi\.gemini\antigravity\scratch\magpk_bot\handlers.py').write_text(code, encoding='utf-8')
+print('handlers.py written successfully')
