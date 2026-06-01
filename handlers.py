@@ -70,7 +70,7 @@ async def notify_admins_about_new_user(bot, user_id: int, username: str | None, 
         except Exception:
             pass
 
-def track_user(message: Message):
+def track_user(message: Message, action_override: str = None):
     uid = message.from_user.id
     username = message.from_user.username
     first_name = message.from_user.first_name
@@ -88,7 +88,7 @@ def track_user(message: Message):
     if is_new:
         asyncio.create_task(notify_admins_about_new_user(message.bot, uid, username, first_name, last_name))
         
-    action = message.text or "[media/other]"
+    action = action_override or message.text or "[media/other]"
     if len(action) > 50:
         action = action[:47] + "..."
     log_activity(uid, action)
@@ -719,7 +719,7 @@ async def cmd_admin(message: Message, state: FSMContext):
 
 @router.message(AdminStates.waiting_for_password)
 async def check_admin_password(message: Message, state: FSMContext):
-    track_user(message)
+    track_user(message, action_override="🔑 Ввод пароля")
     from config import ADMIN_PASSWORD
     
     # Сразу удаляем сообщение пользователя с паролем для конфиденциальности
