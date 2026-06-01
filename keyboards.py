@@ -160,10 +160,19 @@ def week_calendar_keyboard(monday_iso: str) -> InlineKeyboardMarkup:
 
 # ─── Кнопка "О боте" / "Поддержать" ─────────────────────────────────────────
 
-def about_keyboard() -> InlineKeyboardMarkup:
-    """Клавиатура для раздела 'О боте'."""
+def about_keyboard(bot_username: str, user_id: int) -> InlineKeyboardMarkup:
+    """Клавиатура для раздела 'О боте' с персональной реферальной ссылкой."""
     from config import DONATE_LINK
+    import urllib.parse
+    
+    share_text = f"Привет! Держи удобного бота с расписанием МАГПК. Показывает пары на сегодня/завтра/неделю и умеет добавлять их в календарь на телефоне! 📲\n👉 @{bot_username}"
+    share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}?start=ref_{user_id}&text={urllib.parse.quote(share_text)}"
+    
     buttons = [
+        [InlineKeyboardButton(
+            text="📢 Поделиться с друзьями",
+            url=share_url
+        )],
         [InlineKeyboardButton(
             text="☕️ Поддержать проект (СБП)",
             url=DONATE_LINK
@@ -182,6 +191,8 @@ def admin_panel_keyboard(notify_status: bool) -> InlineKeyboardMarkup:
     buttons = [
         [InlineKeyboardButton(text=label, callback_data="toggle_notify")],
         [InlineKeyboardButton(text="📢 Рассылка сообщения", callback_data="admin_broadcast")],
+        [InlineKeyboardButton(text="🤝 Рассылка акции (Рефералы)", callback_data="admin_referral_promo")],
+        [InlineKeyboardButton(text="📊 Статистика активности", callback_data="admin_activity_stats")],
     ]
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 

@@ -38,7 +38,13 @@ from database import (
     set_user_group, 
     update_user_activity, 
     get_user_interface, 
-    set_user_interface
+    set_user_interface,
+    log_activity,
+    get_referred_users_count,
+    is_promo_dismissed,
+    dismiss_promo,
+    can_show_promo_today,
+    record_promo_show
 )
 
 router = Router()
@@ -69,9 +75,23 @@ def track_user(message: Message):
     username = message.from_user.username
     first_name = message.from_user.first_name
     last_name = message.from_user.last_name
-    is_new = update_user_activity(uid, username, first_name, last_name)
+    
+    referrer_id = None
+    if message.text and message.text.startswith("/start "):
+        parts = message.text.split()
+        if len(parts) > 1 and parts[1].startswith("ref_"):
+            ref_val = parts[1][4:]
+            if ref_val.isdigit():
+                referrer_id = int(ref_val)
+                
+    is_new = update_user_activity(uid, username, first_name, last_name, referrer_id)
     if is_new:
         asyncio.create_task(notify_admins_about_new_user(message.bot, uid, username, first_name, last_name))
+        
+    action = message.text or "[media/other]"
+    if len(action) > 50:
+        action = action[:47] + "..."
+    log_activity(uid, action)
 
 def track_callback(call: CallbackQuery):
     uid = call.from_user.id
@@ -81,6 +101,9 @@ def track_callback(call: CallbackQuery):
     is_new = update_user_activity(uid, username, first_name, last_name)
     if is_new:
         asyncio.create_task(notify_admins_about_new_user(call.message.bot, uid, username, first_name, last_name))
+        
+    action = f"cb:{call.data}"
+    log_activity(uid, action)
 
 # ===================================================================
 #  TEXTS
@@ -246,10 +269,24 @@ async def on_change_group_inline(call: CallbackQuery):
 @router.callback_query(F.data == "about_inline")
 async def on_about_inline(call: CallbackQuery):
     track_callback(call)
+    uid = call.from_user.id
+    bot_info = await call.bot.get_me()
+    bot_username = bot_info.username
+    ref_count = get_referred_users_count(uid)
+    
+    text = (
+        f"{ABOUT_TEXT}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤝 *Ваши рефералы:*\n"
+        f"Вы пригласили: *{ref_count}* чел.\n"
+        f"Ваша ссылка для приглашения:\n"
+        f"`https://t.me/{bot_username}?start=ref_{uid}`"
+    )
+    
     await call.message.answer(
-        ABOUT_TEXT,
+        text,
         parse_mode="Markdown",
-        reply_markup=about_keyboard(),
+        reply_markup=about_keyboard(bot_username, uid),
         disable_web_page_preview=True,
     )
     await call.answer()
@@ -281,13 +318,27 @@ async def cmd_help(message: Message):
 
 @router.message(Command("about"))
 @router.message(Command("support"))
-@router.message(F.text == "\u2139\ufe0f \u041e \u0431\u043e\u0442\u0435")
+@router.message(F.text == "ℹ️ О боте")
 async def cmd_about(message: Message):
     track_user(message)
+    uid = message.from_user.id
+    bot_info = await message.bot.get_me()
+    bot_username = bot_info.username
+    ref_count = get_referred_users_count(uid)
+    
+    text = (
+        f"{ABOUT_TEXT}\n\n"
+        f"━━━━━━━━━━━━━━━━━━━━\n"
+        f"🤝 *Ваши рефералы:*\n"
+        f"Вы пригласили: *{ref_count}* чел.\n"
+        f"Ваша ссылка для приглашения:\n"
+        f"`https://t.me/{bot_username}?start=ref_{uid}`"
+    )
+    
     await message.answer(
-        ABOUT_TEXT,
+        text,
         parse_mode="Markdown",
-        reply_markup=about_keyboard(),
+        reply_markup=about_keyboard(bot_username, uid),
         disable_web_page_preview=True,
     )
 
@@ -368,6 +419,7 @@ async def schedule_today(message: Message):
     await msg.edit_text(text, parse_mode="Markdown",
                         disable_web_page_preview=True,
                         reply_markup=calendar_keyboard(today.isoformat(), g_links))
+    await check_and_send_promo(message, uid)
 
 
 # ===================================================================
@@ -395,6 +447,7 @@ async def schedule_tomorrow(message: Message):
     await msg.edit_text(text, parse_mode="Markdown",
                         disable_web_page_preview=True,
                         reply_markup=calendar_keyboard(tomorrow.isoformat(), g_links))
+    await check_and_send_promo(message, uid)
 
 
 # ===================================================================
@@ -426,11 +479,12 @@ async def schedule_week(message: Message):
 
     # One button to add the ENTIRE week at once
     await message.answer(
-        "\U0001f4c5 *\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c?*\n"
+        "📅 *\u0414\u043e\u0431\u0430\u0432\u0438\u0442\u044c \u0432 \u043a\u0430\u043b\u0435\u043d\u0434\u0430\u0440\u044c?*\n"
         "\u041d\u0430\u0436\u043c\u0438 \u043a\u043d\u043e\u043f\u043a\u0443 \u2014 \u0432\u0441\u0435 \u043f\u0430\u0440\u044b \u043d\u0435\u0434\u0435\u043b\u0438 \u0434\u043e\u0431\u0430\u0432\u044f\u0442\u0441\u044f \u0441\u0440\u0430\u0437\u0443!",
         parse_mode="Markdown",
         reply_markup=week_calendar_keyboard(monday.isoformat()),
     )
+    await check_and_send_promo(message, uid)
 
 
 
@@ -476,6 +530,7 @@ async def on_day_select(call: CallbackQuery):
     await call.message.edit_text(text, parse_mode="Markdown",
                                  disable_web_page_preview=True,
                                  reply_markup=calendar_keyboard(target_date.isoformat(), g_links))
+    await check_and_send_promo(call.message, uid)
 
 
 # ===================================================================
@@ -942,3 +997,222 @@ async def unknown(message: Message):
         parse_mode="Markdown",
         reply_markup=main_menu(has_group=bool(group), user_id=uid, interface=interface),
     )
+
+
+# ===================================================================
+#  Promo & Referral callback logic
+# ===================================================================
+
+async def check_and_send_promo(message: Message, user_id: int):
+    """Проверяет возможность показа реферальной промо-акции и отправляет сообщение."""
+    promo_id = "referral_june_2026"
+    if can_show_promo_today(user_id, promo_id):
+        record_promo_show(user_id, promo_id)
+        
+        bot_info = await message.bot.get_me()
+        bot_username = bot_info.username
+        
+        import urllib.parse
+        share_text = f"Привет! Держи удобного бота с расписанием МАГПК. Показывает пары на сегодня/завтра/неделю и умеет добавлять их в календарь на телефоне! 📲\n👉 @{bot_username}"
+        share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}?start=ref_{user_id}&text={urllib.parse.quote(share_text)}"
+        
+        promo_text = (
+            "🤝 *Помоги нашему боту развиваться!* 🎓\n\n"
+            "Привет! Мы стараемся делать самый удобный и быстрый бот расписания для студентов *МАГПК*. Чтобы проект рос и развивался, нам нужна твоя помощь! 🚀\n\n"
+            "Пожалуйста, добавь своих одногруппников и знакомых из политеха, отправь им ссылку на бота! Чем больше студентов пользуются им, тем больше у нас мотивации развивать проект и добавлять новые функции (уведомления об изменениях, расписание преподавателей и др.).\n\n"
+            "Нажми кнопку ниже, чтобы поделиться ботом прямо в Telegram! 👇"
+        )
+        
+        from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+        keyboard = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📢 Поделиться со знакомыми", url=share_url)],
+            [InlineKeyboardButton(text="❌ Больше не показывать", callback_data="promo_dismiss")]
+        ])
+        
+        await asyncio.sleep(0.5)
+        await message.answer(promo_text, parse_mode="Markdown", reply_markup=keyboard)
+
+
+@router.callback_query(F.data == "promo_dismiss")
+async def on_promo_dismiss(call: CallbackQuery):
+    track_callback(call)
+    uid = call.from_user.id
+    dismiss_promo(uid, "referral_june_2026")
+    
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    close_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🆗 Закрыть", callback_data="delete_promo_message")]
+    ])
+    
+    try:
+        await call.message.edit_text(
+            "❤️ *Спасибо за поддержку проекта!*\n\n"
+            "Желаем успешной учебы! Если захотите поделиться ботом позже, кнопка и ссылка всегда доступны в разделе *О боте*.",
+            parse_mode="Markdown",
+            reply_markup=close_kb
+        )
+    except Exception:
+        pass
+    await call.answer()
+
+
+@router.callback_query(F.data == "delete_promo_message")
+async def on_delete_promo_message(call: CallbackQuery):
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+    await call.answer()
+
+
+# ===================================================================
+#  Admin Analytics & Referral Promo Broadcast
+# ===================================================================
+
+@router.callback_query(F.data == "admin_activity_stats")
+async def on_admin_activity_stats(call: CallbackQuery):
+    track_callback(call)
+    from config import ADMIN_IDS
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Доступ ограничен.", show_alert=True)
+        return
+        
+    from database import get_activity_stats
+    stats = get_activity_stats()
+    
+    from database import get_admin_settings
+    settings = get_admin_settings()
+    notify_status = settings.get("notify_new_users", True)
+    
+    from keyboards import admin_panel_keyboard
+    
+    await call.message.answer(
+        stats,
+        parse_mode="Markdown",
+        reply_markup=admin_panel_keyboard(notify_status)
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "admin_referral_promo")
+async def on_admin_referral_promo(call: CallbackQuery):
+    track_callback(call)
+    from config import ADMIN_IDS
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Доступ ограничен.", show_alert=True)
+        return
+        
+    from database import _get_cache
+    cache = _get_cache()
+    promo_id = "referral_june_2026"
+    target_count = 0
+    for uid_str, info in cache.items():
+        if uid_str == "__settings__":
+            continue
+        if isinstance(info, dict):
+            promos = info.get("promos", {})
+            promo_info = promos.get(promo_id)
+            dismissed = False
+            if isinstance(promo_info, dict):
+                dismissed = promo_info.get("dismissed", False)
+            elif isinstance(promo_info, bool):
+                dismissed = promo_info
+            
+            if not dismissed:
+                target_count += 1
+        else:
+            target_count += 1
+            
+    from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+    confirm_kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✅ Да, запустить рассылку", callback_data="admin_broadcast_promo_confirm")],
+        [InlineKeyboardButton(text="❌ Отмена", callback_data="broadcast_cancel")]
+    ])
+    
+    await call.message.edit_text(
+        f"📢 *Запуск реферальной промо-акции*\n\n"
+        f"Будет отправлено предложение поделиться ботом со ссылкой-шарингом всем пользователям, кто еще не отключил его.\n\n"
+        f"🎯 Получателей: *{target_count}* чел.\n\n"
+        f"Запустить рассылку?",
+        parse_mode="Markdown",
+        reply_markup=confirm_kb
+    )
+    await call.answer()
+
+
+@router.callback_query(F.data == "admin_broadcast_promo_confirm")
+async def on_admin_broadcast_promo_confirm(call: CallbackQuery):
+    track_callback(call)
+    from config import ADMIN_IDS
+    if call.from_user.id not in ADMIN_IDS:
+        await call.answer("❌ Доступ ограничен.", show_alert=True)
+        return
+        
+    await call.message.edit_text("🚀 *Начинаю рассылку промо-акции...*", parse_mode="Markdown")
+    
+    from database import _get_cache, record_promo_show
+    cache = _get_cache()
+    promo_id = "referral_june_2026"
+    
+    bot_info = await call.bot.get_me()
+    bot_username = bot_info.username
+    
+    success, fail = 0, 0
+    for uid_str, info in cache.items():
+        if uid_str == "__settings__":
+            continue
+            
+        is_target = False
+        if isinstance(info, dict):
+            promos = info.get("promos", {})
+            promo_info = promos.get(promo_id)
+            dismissed = False
+            if isinstance(promo_info, dict):
+                dismissed = promo_info.get("dismissed", False)
+            elif isinstance(promo_info, bool):
+                dismissed = promo_info
+            if not dismissed:
+                is_target = True
+        else:
+            is_target = True
+            
+        if is_target:
+            uid = int(uid_str)
+            import urllib.parse
+            share_text = f"Привет! Держи удобного бота с расписанием МАГПК. Показывает пары на сегодня/завтра/неделю и умеет добавлять их в календарь на телефоне! 📲\n👉 @{bot_username}"
+            share_url = f"https://t.me/share/url?url=https://t.me/{bot_username}?start=ref_{uid}&text={urllib.parse.quote(share_text)}"
+            
+            promo_text = (
+                "🤝 *Помоги нашему боту развиваться!* 🎓\n\n"
+                "Привет! Мы стараемся делать самый удобный и быстрый бот расписания для студентов *МАГПК*. Чтобы проект рос и развивался, нам нужна твоя помощь! 🚀\n\n"
+                "Пожалуйста, добавь своих одногруппников и знакомых из политеха, отправь им ссылку на бота! Чем больше студентов пользуются им, тем больше у нас мотивации развивать проект и добавлять новые функции (уведомления об изменениях, расписание преподавателей и др.).\n\n"
+                "Нажми кнопку ниже, чтобы поделиться ботом прямо в Telegram! 👇"
+            )
+            
+            from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+            keyboard = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📢 Поделиться со знакомыми", url=share_url)],
+                [InlineKeyboardButton(text="❌ Больше не показывать", callback_data="promo_dismiss")]
+            ])
+            
+            try:
+                await call.bot.send_message(
+                    chat_id=uid,
+                    text=promo_text,
+                    parse_mode="Markdown",
+                    reply_markup=keyboard,
+                    disable_notification=True
+                )
+                record_promo_show(uid, promo_id)
+                success += 1
+                await asyncio.sleep(0.05)
+            except Exception:
+                fail += 1
+                
+    await call.message.answer(
+        f"✅ *Рассылка промо-акции завершена!*\n\n"
+        f"📈 Успешно отправлено: *{success}*\n"
+        f"❌ Ошибок: *{fail}*",
+        parse_mode="Markdown"
+    )
+    await call.answer()
