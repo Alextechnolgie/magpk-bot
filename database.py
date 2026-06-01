@@ -168,7 +168,12 @@ def init_db():
             """
         ]
 
-    conn = get_connection()
+    try:
+        conn = get_connection()
+    except Exception as e:
+        print(f"❌ Не удалось подключиться к базе данных при инициализации: {e}")
+        return
+
     try:
         cur = conn.cursor()
         for q in queries:
@@ -210,7 +215,11 @@ def migrate_json_to_db():
             else:
                 data = json.loads(_xor_decipher(content, DB_ENCRYPTION_KEY))
 
-        conn = get_connection()
+        try:
+            conn = get_connection()
+        except Exception as e:
+            print(f"❌ Не удалось подключиться к базе данных при миграции: {e}")
+            return
         try:
             cur = conn.cursor()
             
@@ -292,8 +301,11 @@ def migrate_json_to_db():
 
 
 # Запускаем инициализацию и миграцию при импорте модуля
-init_db()
-migrate_json_to_db()
+try:
+    init_db()
+    migrate_json_to_db()
+except Exception as e:
+    print(f"⚠️ Предупреждение: не удалось инициализировать БД при старте: {e}")
 
 # -----------------------------------------------------------------------------
 # Google Sheet Sync
