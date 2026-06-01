@@ -1,28 +1,81 @@
+# -*- coding: utf-8 -*-
+"""
+Database module for MAGPK Bot.
+Migrated from users.json file to PostgreSQL (on Railway) with SQLite local fallback.
+Supports automatic table initialization and migration of existing users.json data.
+"""
+
 import json
 import os
 import tempfile
 import base64
-import shutil
-from datetime import datetime, timedelta, timezone
+import sqlite3
+from datetime import datetime, timedelta, date
 from config import get_mgn_now, get_mgn_today
 
-# Если папка /data существует (например, в Docker или Railway Volume), используем её.
-# Иначе используем текущую директорию.
-DB_DIR = "/data" if os.path.isdir("/data") else "."
-DB_FILE = os.path.join(DB_DIR, "users.json")
-BACKUP_FILE = DB_FILE + ".bak"
-ACTIVITY_LOG_FILE = os.path.join(DB_DIR, "activity.log")
+# Попробуем импортировать psycopg2 для Postgres
+try:
+    import psycopg2
+    from psycopg2.extras import RealDictCursor
+    HAS_PSYCOPG2 = True
+except ImportError:
+    HAS_PSYCOPG2 = False
 
-# Внутрипамятый кэш для исключения постоянного чтения с диска
-_users_cache = None
+# Считываем DATABASE_URL из переменных окружения
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+# Если URL задан и библиотека psycopg2 установлена, используем PostgreSQL
+USE_POSTGRES = bool(DATABASE_URL) and HAS_PSYCOPG2
+
+if not HAS_PSYCOPG2 and DATABASE_URL:
+    print("⚠️ DATABASE_URL задана, но библиотека psycopg2-binary не установлена. Используем локальный SQLite.")
+
+# -----------------------------------------------------------------------------
+# Подключение и управление соединениями
+# -----------------------------------------------------------------------------
+
+def get_connection():
+    """Создает новое соединение с базой данных (Postgres или SQLite)."""
+    if USE_POSTGRES:
+        return psycopg2.connect(DATABASE_URL)
+    else:
+        # SQLite
+        db_dir = "/data" if os.path.isdir("/data") else "."
+        db_path = os.path.join(db_dir, "users.db")
+        conn = sqlite3.connect(db_path)
+        # Включаем поддержку внешних ключей в SQLite
+        conn.execute("PRAGMA foreign_keys = ON;")
+        return conn
 
 
-def _xor_cipher(data_str: str, key: str) -> str:
-    key_bytes = key.encode("utf-8")
-    data_bytes = data_str.encode("utf-8")
-    xor_bytes = bytearray(d ^ key_bytes[i % len(key_bytes)] for i, d in enumerate(data_bytes))
-    return base64.b64encode(xor_bytes).decode("utf-8")
+def execute_query(query, params=None, fetch=None):
+    """Выполняет SQL-запрос, безопасно управляя соединением и курсором."""
+    # Если SQLite, конвертируем плейсхолдеры %s в ?
+    if not USE_POSTGRES:
+        query = query.replace("%s", "?")
 
+    conn = get_connection()
+    try:
+        cur = conn.cursor()
+        cur.execute(query, params or ())
+        if fetch == "one":
+            result = cur.fetchone()
+        elif fetch == "all":
+            result = cur.fetchall()
+        else:
+            result = None
+        conn.commit()
+        return result
+    except Exception as e:
+        conn.rollback()
+        print(f"❌ Ошибка SQL ({query}): {e}")
+        raise e
+    finally:
+        conn.close()
+
+# -----------------------------------------------------------------------------
+# Шифрование XOR (для миграции старого users.json)
+# -----------------------------------------------------------------------------
 
 def _xor_decipher(encoded_str: str, key: str) -> str:
     key_bytes = key.encode("utf-8")
@@ -30,208 +83,221 @@ def _xor_decipher(encoded_str: str, key: str) -> str:
     data_bytes = bytearray(d ^ key_bytes[i % len(key_bytes)] for i, d in enumerate(xor_bytes))
     return data_bytes.decode("utf-8")
 
+# -----------------------------------------------------------------------------
+# Инициализация схемы и Миграция
+# -----------------------------------------------------------------------------
 
-def _load_from_file(path: str) -> dict | None:
-    """Загружает и дешифрует данные из конкретного файла."""
-    if not os.path.exists(path):
-        return None
-    
-    from config import DB_ENCRYPTION_KEY
+def init_db():
+    """Создает таблицы базы данных при первом запуске."""
+    if USE_POSTGRES:
+        queries = [
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id BIGINT PRIMARY KEY,
+                group_name VARCHAR(50),
+                username VARCHAR(100),
+                first_name VARCHAR(100),
+                last_name VARCHAR(100),
+                interface VARCHAR(20) DEFAULT 'full',
+                joined_at TIMESTAMP,
+                last_seen TIMESTAMP,
+                invited_by BIGINT
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS promos (
+                user_id BIGINT REFERENCES users(user_id) ON DELETE CASCADE,
+                promo_id VARCHAR(100),
+                dismissed BOOLEAN DEFAULT FALSE,
+                last_shown_at DATE,
+                PRIMARY KEY (user_id, promo_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key VARCHAR(50) PRIMARY KEY,
+                value TEXT
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id SERIAL PRIMARY KEY,
+                user_id BIGINT,
+                time TIMESTAMP,
+                action VARCHAR(255)
+            );
+            """
+        ]
+    else:
+        queries = [
+            """
+            CREATE TABLE IF NOT EXISTS users (
+                user_id INTEGER PRIMARY KEY,
+                group_name TEXT,
+                username TEXT,
+                first_name TEXT,
+                last_name TEXT,
+                interface TEXT DEFAULT 'full',
+                joined_at TIMESTAMP,
+                last_seen TIMESTAMP,
+                invited_by INTEGER
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS promos (
+                user_id INTEGER REFERENCES users(user_id) ON DELETE CASCADE,
+                promo_id TEXT,
+                dismissed INTEGER DEFAULT 0,
+                last_shown_at TEXT,
+                PRIMARY KEY (user_id, promo_id)
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT
+            );
+            """,
+            """
+            CREATE TABLE IF NOT EXISTS activity_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER,
+                time TIMESTAMP,
+                action TEXT
+            );
+            """
+        ]
+
+    conn = get_connection()
     try:
-        with open(path, "r", encoding="utf-8") as f:
+        cur = conn.cursor()
+        for q in queries:
+            cur.execute(q)
+        conn.commit()
+        print(f"✅ База данных успешно инициализирована (Postgres: {USE_POSTGRES})")
+    except Exception as e:
+        print(f"❌ Ошибка инициализации таблиц: {e}")
+    finally:
+        conn.close()
+
+
+def migrate_json_to_db():
+    """Переносит данные из старого users.json в SQL базу данных при первом запуске."""
+    try:
+        # Проверяем, пуста ли таблица users
+        res = execute_query("SELECT COUNT(*) FROM users;", fetch="one")
+        if res and res[0] > 0:
+            return
+
+        db_dir = "/data" if os.path.isdir("/data") else "."
+        old_db_file = os.path.join(db_dir, "users.json")
+        if not os.path.exists(old_db_file):
+            old_db_file = "users.json"
+
+        if not os.path.exists(old_db_file):
+            return
+
+        print(f"📦 Найдена старая база {old_db_file}. Запуск миграции...")
+        from config import DB_ENCRYPTION_KEY
+
+        with open(old_db_file, "r", encoding="utf-8") as f:
             content = f.read().strip()
             if not content:
-                return None
-                
+                return
+
             if content.startswith("{"):
-                return json.loads(content)
+                data = json.loads(content)
             else:
-                decrypted = _xor_decipher(content, DB_ENCRYPTION_KEY)
-                return json.loads(decrypted)
-    except Exception as e:
-        print(f"⚠️ Ошибка при чтении {path}: {e}")
-        return None
+                data = json.loads(_xor_decipher(content, DB_ENCRYPTION_KEY))
 
-
-def _load() -> dict:
-    # 1. Пытаемся загрузить основной файл
-    data = _load_from_file(DB_FILE)
-    
-    # 2. Если основной файл битый или пустой, пробуем бэкап
-    if data is None and os.path.exists(BACKUP_FILE):
-        print(f"🔄 Попытка восстановления из бэкапа: {BACKUP_FILE}")
-        data = _load_from_file(BACKUP_FILE)
-        if data:
-            print("✅ Данные восстановлены из бэкапа!")
-            _save(data) # Сохраняем восстановленное как основное
-            
-    if data is None:
-        data = {}
-                        
-    # Если в базе нет ключевых старых пользователей, добавляем их (НЕ затирая новых)
-    old_users = {
-        "8510857913": {
-            "group": "ТМ9-23-2",
-            "joined_at": "2026-05-28 17:37:49",
-            "last_seen": "2026-05-28 17:54:21",
-            "username": "Ishmametyev",
-            "first_name": "Алексей",
-            "last_name": "Ишмаметьев"
-        },
-        "787372049": {
-            "group": "ТМ9-23-2",
-            "joined_at": "2026-05-28 17:40:04",
-            "last_seen": "2026-05-28 17:40:31",
-            "username": "tsukimanu",
-            "first_name": "Костя",
-            "last_name": ""
-        },
-        "1478043047": {
-            "group": "ТМ9-23-2",
-            "joined_at": "2026-05-28 17:41:14",
-            "last_seen": "2026-05-28 17:41:36",
-            "username": "kiprro",
-            "first_name": "URAL",
-            "last_name": ""
-        },
-        "1003834844": {
-            "group": "ТМ9-23-2",
-            "joined_at": "2026-05-28 17:47:48",
-            "last_seen": "2026-05-28 17:48:52",
-            "username": "Stranadozdei",
-            "first_name": "Noize",
-            "last_name": ""
-        },
-        "1054079756": {
-            "group": "ТМ9-23-2",
-            "joined_at": "2026-05-28 17:48:11",
-            "last_seen": "2026-05-28 17:48:27",
-            "username": "MrNoMor",
-            "first_name": "Mr.NoMore",
-            "last_name": ""
-        },
-        "5011839347": {
-            "group": "ТМ9-23-2",
-            "joined_at": "2026-05-28 17:53:02",
-            "last_seen": "2026-05-28 17:53:24",
-            "username": "Sudar73i",
-            "first_name": "Sudar'",
-            "last_name": ""
-        },
-        "5168364362": {
-            "group": "МС-25",
-            "joined_at": "2026-05-28 17:53:57",
-            "last_seen": "2026-05-28 17:54:08",
-            "username": "UwU_loveeeeee",
-            "first_name": "Лерч",
-            "last_name": ""
-        },
-        "6534886874": {
-            "group": "ТМ9-23-2",
-            "joined_at": "2026-05-29 00:38:08",
-            "last_seen": "2026-05-29 00:38:47",
-            "username": "Sm0k1ti",
-            "first_name": "Sm0k1ti\"",
-            "last_name": ""
-        },
-        "1527703119": {
-            "group": None,
-            "joined_at": "2026-05-29 00:57:09",
-            "last_seen": "2026-05-29 00:57:15",
-            "username": "kaynex",
-            "first_name": "𝚔𝚊𝚢𝚗𝚎𝚡",
-            "last_name": ""
-        }
-    }
-    
-    modified = False
-    for uid, info in old_users.items():
-        if uid not in data:
-            data[uid] = info
-            modified = True
-            
-    if modified:
-        _save(data)
-        
-    return data
-
-
-def _save(data: dict):
-    """Атомарно сохраняет данные на диск с созданием бэкапа."""
-    from config import DB_ENCRYPTION_KEY
-    data_str = json.dumps(data, ensure_ascii=False, indent=2)
-    encrypted = _xor_cipher(data_str, DB_ENCRYPTION_KEY)
-    
-    # 1. Создаем бэкап текущего рабочего файла перед обновлением
-    if os.path.exists(DB_FILE):
+        conn = get_connection()
         try:
-            shutil.copy2(DB_FILE, BACKUP_FILE)
-        except Exception:
-            pass
-
-    # 2. Атомарная запись через временный файл (предотвращает пустой файл при сбое)
-    dir_name = os.path.dirname(DB_FILE)
-    temp_fd, temp_path = tempfile.mkstemp(dir=dir_name, prefix="db_tmp_")
-    try:
-        with os.fdopen(temp_fd, 'w', encoding='utf-8') as f:
-            f.write(encrypted)
-        
-        # В Windows os.rename не может перезаписывать существующий файл
-        if os.name == 'nt' and os.path.exists(DB_FILE):
-            os.remove(DB_FILE)
+            cur = conn.cursor()
             
-        os.rename(temp_path, DB_FILE)
+            # Для SQLite / Postgres
+            placeholder = "?" if not USE_POSTGRES else "%s"
+
+            for uid_str, info in data.items():
+                if uid_str == "__settings__":
+                    # Перенос настроек админа
+                    val_str = json.dumps(info)
+                    cur.execute(f"""
+                        INSERT INTO settings (key, value) VALUES ('admin_settings', {placeholder})
+                        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+                    """, (val_str,))
+                    continue
+
+                uid = int(uid_str)
+                group = None
+                joined_at = None
+                last_seen = None
+                username = None
+                first_name = None
+                last_name = None
+                interface = "full"
+                invited_by = None
+                promos = {}
+
+                if isinstance(info, dict):
+                    group = info.get("group")
+                    joined_at = info.get("joined_at")
+                    last_seen = info.get("last_seen")
+                    username = info.get("username")
+                    first_name = info.get("first_name")
+                    last_name = info.get("last_name")
+                    interface = info.get("interface", "full")
+                    invited_by = info.get("invited_by")
+                    promos = info.get("promos", {})
+                else:
+                    group = info
+
+                # Вставка пользователя
+                cur.execute(f"""
+                    INSERT INTO users (user_id, group_name, username, first_name, last_name, interface, joined_at, last_seen, invited_by)
+                    VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder}, {placeholder})
+                    ON CONFLICT (user_id) DO NOTHING;
+                """, (uid, group, username, first_name, last_name, interface, joined_at, last_seen, invited_by))
+
+                # Вставка промо для пользователя
+                for promo_id, p_info in promos.items():
+                    dismissed = False
+                    last_shown = None
+                    if isinstance(p_info, dict):
+                        dismissed = p_info.get("dismissed", False)
+                        last_shown = p_info.get("last_shown_at")
+                    elif isinstance(p_info, bool):
+                        dismissed = p_info
+
+                    cur.execute(f"""
+                        INSERT INTO promos (user_id, promo_id, dismissed, last_shown_at)
+                        VALUES ({placeholder}, {placeholder}, {placeholder}, {placeholder})
+                        ON CONFLICT (user_id, promo_id) DO NOTHING;
+                    """, (uid, promo_id, dismissed, last_shown))
+
+            conn.commit()
+            print("✅ Все данные успешно перенесены из JSON в SQL базу!")
+            
+            # Переименовываем users.json, чтобы больше не запускать миграцию
+            try:
+                os.rename(old_db_file, old_db_file + ".migrated")
+            except Exception:
+                pass
+        except Exception as e:
+            conn.rollback()
+            print(f"❌ Ошибка миграции SQL: {e}")
+        finally:
+            conn.close()
     except Exception as e:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
-        print(f"❌ Критическая ошибка при сохранении базы: {e}")
+        print(f"❌ Ошибка чтения файла миграции: {e}")
 
 
-def _get_cache() -> dict:
-    global _users_cache
-    if _users_cache is None:
-        _users_cache = _load()
-    return _users_cache
+# Запускаем инициализацию и миграцию при импорте модуля
+init_db()
+migrate_json_to_db()
 
-
-def get_user_group(user_id: int) -> str | None:
-    """Возвращает сохранённую группу пользователя или None из кэша памяти."""
-    cache = _get_cache()
-    info = cache.get(str(user_id))
-    if isinstance(info, dict):
-        return info.get("group")
-    return info  # string or None
-
-
-def get_user_interface(user_id: int) -> str:
-    """Возвращает тип интерфейса пользователя (по умолчанию 'full')."""
-    cache = _get_cache()
-    info = cache.get(str(user_id))
-    if isinstance(info, dict):
-        return info.get("interface", "full")
-    return "full"
-
-
-def set_user_interface(user_id: int, interface_type: str):
-    """Устанавливает тип интерфейса пользователя."""
-    cache = _get_cache()
-    uid_str = str(user_id)
-    info = cache.get(uid_str)
-    
-    if not isinstance(info, dict):
-        info = {
-            "group": info if isinstance(info, str) else None,
-            "joined_at": get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-            "last_seen": get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-            "username": None,
-            "first_name": None,
-            "last_name": None
-        }
-    
-    info["interface"] = interface_type
-    cache[uid_str] = info
-    _save(cache)
-
+# -----------------------------------------------------------------------------
+# Google Sheet Sync
+# -----------------------------------------------------------------------------
 
 def _sync_user_to_google(user_id: int, info: dict):
     """Отправляет данные пользователя в Google Таблицу в фоновом режиме."""
@@ -265,96 +331,135 @@ def _sync_user_to_google(user_id: int, info: dict):
     except RuntimeError:
         pass
 
+# -----------------------------------------------------------------------------
+# Методы получения и обновления данных (Пользователи)
+# -----------------------------------------------------------------------------
+
+def get_user_group(user_id: int) -> str | None:
+    """Возвращает сохранённую группу пользователя."""
+    res = execute_query("SELECT group_name FROM users WHERE user_id = %s;", (user_id,), fetch="one")
+    return res[0] if res else None
+
+
+def get_user_interface(user_id: int) -> str:
+    """Возвращает тип интерфейса пользователя (по умолчанию 'full')."""
+    res = execute_query("SELECT interface FROM users WHERE user_id = %s;", (user_id,), fetch="one")
+    return res[0] if res else "full"
+
+
+def set_user_interface(user_id: int, interface_type: str):
+    """Устанавливает тип интерфейса пользователя."""
+    now_str = get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    execute_query("""
+        INSERT INTO users (user_id, interface, joined_at, last_seen)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET interface = EXCLUDED.interface, last_seen = EXCLUDED.last_seen;
+    """, (user_id, interface_type, now_str, now_str))
+
 
 def set_user_group(user_id: int, group: str):
-    """Сохраняет группу пользователя в кэш и записывает на диск."""
-    cache = _get_cache()
-    uid_str = str(user_id)
-    info = cache.get(uid_str)
-    
+    """Сохраняет группу пользователя."""
     now_str = get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    execute_query("""
+        INSERT INTO users (user_id, group_name, joined_at, last_seen)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (user_id) DO UPDATE SET group_name = EXCLUDED.group_name, last_seen = EXCLUDED.last_seen;
+    """, (user_id, group, now_str, now_str))
     
-    if isinstance(info, dict):
-        info["group"] = group
-    else:
+    # Получаем полные данные для синхронизации с Google Sheets
+    res = execute_query("SELECT username, first_name, last_name, joined_at, last_seen FROM users WHERE user_id = %s;", (user_id,), fetch="one")
+    if res:
+        username, first_name, last_name, j_at, l_seen = res
+        
+        def format_dt(dt):
+            if isinstance(dt, datetime):
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            return str(dt) if dt else None
+
         info = {
             "group": group,
-            "joined_at": now_str,
-            "last_seen": now_str,
-            "username": None,
-            "first_name": None,
-            "last_name": None
+            "username": username,
+            "first_name": first_name,
+            "last_name": last_name,
+            "joined_at": format_dt(j_at),
+            "last_seen": format_dt(l_seen)
         }
-    cache[uid_str] = info
-    _save(cache)
-    _sync_user_to_google(user_id, info)
+        _sync_user_to_google(user_id, info)
 
 
 def update_user_activity(user_id: int, username: str | None, first_name: str | None, last_name: str | None, referrer_id: int = None) -> bool:
-    """Обновляет информацию об имени аккаунта и времени последней активности.
-    Возвращает True, если пользователь абсолютно новый (ранее отсутствовал в базе)."""
-    cache = _get_cache()
-    uid_str = str(user_id)
-    is_new = uid_str not in cache
+    """Обновляет имя аккаунта и время активности. Возвращает True, если пользователь новый."""
+    res = execute_query("SELECT user_id FROM users WHERE user_id = %s;", (user_id,), fetch="one")
+    is_new = res is None
     
     now_str = get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
     
-    info = cache.get(uid_str)
-    if isinstance(info, dict):
-        if "joined_at" not in info:
-            info["joined_at"] = now_str
-        info["last_seen"] = now_str
-        info["username"] = username
-        info["first_name"] = first_name
-        info["last_name"] = last_name
-    elif isinstance(info, str):
-        info = {
-            "group": info,
-            "joined_at": now_str,
-            "last_seen": now_str,
-            "username": username,
-            "first_name": first_name,
-            "last_name": last_name
-        }
+    if is_new:
+        invited_by = referrer_id if (referrer_id and referrer_id != user_id) else None
+        execute_query("""
+            INSERT INTO users (user_id, username, first_name, last_name, joined_at, last_seen, invited_by)
+            VALUES (%s, %s, %s, %s, %s, %s, %s);
+        """, (user_id, username, first_name, last_name, now_str, now_str, invited_by))
     else:
+        execute_query("""
+            UPDATE users SET username = %s, first_name = %s, last_name = %s, last_seen = %s WHERE user_id = %s;
+        """, (username, first_name, last_name, now_str, user_id))
+        
+    # Синхронизация Google Sheets
+    res = execute_query("SELECT group_name, joined_at, last_seen, invited_by FROM users WHERE user_id = %s;", (user_id,), fetch="one")
+    if res:
+        group_name, j_at, l_seen, inv_by = res
+        
+        def format_dt(dt):
+            if isinstance(dt, datetime):
+                return dt.strftime("%Y-%m-%d %H:%M:%S")
+            return str(dt) if dt else None
+
         info = {
-            "group": None,
-            "joined_at": now_str,
-            "last_seen": now_str,
+            "group": group_name,
             "username": username,
             "first_name": first_name,
-            "last_name": last_name
+            "last_name": last_name,
+            "joined_at": format_dt(j_at),
+            "last_seen": format_dt(l_seen)
         }
+        _sync_user_to_google(user_id, info)
         
-    if is_new and referrer_id and referrer_id != user_id:
-        info["invited_by"] = referrer_id
-        
-    cache[uid_str] = info
-    _save(cache)
-    _sync_user_to_google(user_id, info)
     return is_new
 
-
+# -----------------------------------------------------------------------------
+# Настройки Администратора
+# -----------------------------------------------------------------------------
 
 def get_admin_settings() -> dict:
     """Возвращает настройки администратора."""
-    cache = _get_cache()
-    settings = cache.get("__settings__")
-    if not isinstance(settings, dict):
-        settings = {"notify_new_users": True}
-    return settings
+    res = execute_query("SELECT value FROM settings WHERE key = 'admin_settings';", fetch="one")
+    if res:
+        try:
+            return json.loads(res[0])
+        except Exception:
+            pass
+    return {"notify_new_users": True}
 
 
 def set_admin_settings(settings: dict):
-    """Сохраняет настройки администратора в базу."""
-    cache = _get_cache()
-    cache["__settings__"] = settings
-    _save(cache)
+    """Сохраняет настройки администратора."""
+    val_str = json.dumps(settings)
+    execute_query("""
+        INSERT INTO settings (key, value) VALUES ('admin_settings', %s)
+        ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value;
+    """, (val_str,))
 
+# -----------------------------------------------------------------------------
+# Вспомогательные функции дат
+# -----------------------------------------------------------------------------
 
-def _parse_datetime(dt_str: str | None) -> datetime | None:
-    if not dt_str:
+def _parse_datetime(dt_val) -> datetime | None:
+    if not dt_val:
         return None
+    if isinstance(dt_val, datetime):
+        return dt_val
+    dt_str = str(dt_val)
     for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%d"):
         try:
             return datetime.strptime(dt_str, fmt)
@@ -362,11 +467,151 @@ def _parse_datetime(dt_str: str | None) -> datetime | None:
             pass
     return None
 
+# -----------------------------------------------------------------------------
+# Реферальная система и Промо-акции
+# -----------------------------------------------------------------------------
+
+def get_referred_users_count(user_id: int) -> int:
+    """Возвращает число приглашенных этим пользователем человек."""
+    res = execute_query("SELECT COUNT(*) FROM users WHERE invited_by = %s;", (user_id,), fetch="one")
+    return res[0] if res else 0
+
+
+def is_promo_dismissed(user_id: int, promo_id: str) -> bool:
+    """Проверяет, отключил ли пользователь промо навсегда."""
+    res = execute_query("SELECT dismissed FROM promos WHERE user_id = %s AND promo_id = %s;", (user_id, promo_id), fetch="one")
+    if res:
+        return bool(res[0])
+    return False
+
+
+def dismiss_promo(user_id: int, promo_id: str):
+    """Скрывает промо навсегда для пользователя."""
+    execute_query("""
+        INSERT INTO promos (user_id, promo_id, dismissed)
+        VALUES (%s, %s, %s)
+        ON CONFLICT (user_id, promo_id) DO UPDATE SET dismissed = EXCLUDED.dismissed;
+    """, (user_id, promo_id, True))
+
+
+def can_show_promo_today(user_id: int, promo_id: str) -> bool:
+    """Проверяет, можно ли показать пользователю промо сегодня."""
+    res = execute_query("SELECT dismissed, last_shown_at FROM promos WHERE user_id = %s AND promo_id = %s;", (user_id, promo_id), fetch="one")
+    if not res:
+        return True
+        
+    dismissed, last_shown = res
+    if dismissed:
+        return False
+        
+    if not last_shown:
+        return True
+        
+    today = get_mgn_today()
+    if isinstance(last_shown, str):
+        return last_shown != today.isoformat()
+    else:
+        return last_shown != today
+
+
+def record_promo_show(user_id: int, promo_id: str):
+    """Записывает сегодняшнюю дату как дату последнего показа промо."""
+    today_str = get_mgn_today().isoformat()
+    execute_query("""
+        INSERT INTO promos (user_id, promo_id, dismissed, last_shown_at)
+        VALUES (%s, %s, %s, %s)
+        ON CONFLICT (user_id, promo_id) DO UPDATE SET last_shown_at = EXCLUDED.last_shown_at;
+    """, (user_id, promo_id, False, today_str))
+
+# -----------------------------------------------------------------------------
+# Логирование и Метрики Активности
+# -----------------------------------------------------------------------------
+
+def log_activity(user_id: int, action: str):
+    """Логирует действие пользователя."""
+    now_str = get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
+    execute_query("INSERT INTO activity_log (user_id, time, action) VALUES (%s, %s, %s);", (user_id, now_str, action))
+
+
+def get_activity_stats() -> str:
+    """Генерирует красивый текстовый отчет активности пользователей."""
+    now = get_mgn_now().replace(tzinfo=None)
+    today_start = datetime(now.year, now.month, now.day)
+    seven_days_ago = today_start - timedelta(days=7)
+    
+    # Считываем логи за последние 7 дней
+    if USE_POSTGRES:
+        logs = execute_query("SELECT user_id, time, action FROM activity_log WHERE time >= %s;", (seven_days_ago,), fetch="all")
+        total_today_res = execute_query("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM activity_log WHERE time >= %s;", (today_start,), fetch="one")
+        total_today, dau = total_today_res if total_today_res else (0, 0)
+    else:
+        logs = execute_query("SELECT user_id, time, action FROM activity_log WHERE time >= %s;", (seven_days_ago.strftime("%Y-%m-%d %H:%M:%S"),), fetch="all")
+        total_today_res = execute_query("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM activity_log WHERE time >= %s;", (today_start.strftime("%Y-%m-%d %H:%M:%S"),), fetch="one")
+        total_today, dau = total_today_res if total_today_res else (0, 0)
+        
+    if not logs:
+        return "📊 *Статистика активности:* Нет логов за последние 7 дней."
+        
+    total_week = len(logs)
+    active_users_week = set()
+    
+    hourly_distribution = [0] * 24
+    command_counts = {}
+    
+    for row in logs:
+        uid, time_val, action = row
+        active_users_week.add(uid)
+        
+        dt = time_val
+        if isinstance(dt, str):
+            dt = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")
+            
+        hourly_distribution[dt.hour] += 1
+        
+        cmd = action.split()[0] if action else "unknown"
+        if cmd.startswith("cb:"):
+            cmd = "кнопка: " + cmd.split(":")[1].split()[0]
+        command_counts[cmd] = command_counts.get(cmd, 0) + 1
+        
+    wau = len(active_users_week)
+    
+    top_commands = sorted(command_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    commands_str = "\n".join(f"  • `{cmd}`: *{count}* раз" for cmd, count in top_commands)
+    
+    max_hour_val = max(hourly_distribution) if max(hourly_distribution) > 0 else 1
+    chart_lines = []
+    for h in range(24):
+        val = hourly_distribution[h]
+        if val > 0 or (7 <= h <= 22):
+            filled = int((val / max_hour_val) * 10)
+            bar = "█" * filled + "░" * (10 - filled)
+            chart_lines.append(f"`{h:02d}:00` `[{bar}]` *{val}* запр.")
+            
+    peak_hours = sorted(range(24), key=lambda h: hourly_distribution[h], reverse=True)[:5]
+    peak_hours_str = ", ".join(f"{h:02d}:00" for h in peak_hours if hourly_distribution[h] > 0)
+    
+    lines = [
+        "📊 *Анализ активности пользователей:*",
+        f"👥 Активно сегодня (DAU): *{dau}* чел. ({total_today} запр.)",
+        f"👥 Активно за 7 дней (WAU): *{wau}* чел. ({total_week} запр.)",
+        f"🔥 Пиковое время: *{peak_hours_str or 'нет данных'}*",
+        "",
+        "🔝 *Популярные функции (за 7 дней):*",
+        commands_str or "  • Нет данных",
+        "",
+        "🕒 *Активность по часам (за 7 дней):*",
+        *chart_lines
+    ]
+    return "\n".join(lines)
+
+# -----------------------------------------------------------------------------
+# Общая статистика панели администратора
+# -----------------------------------------------------------------------------
 
 def get_admin_stats() -> str:
-    """Генерирует сводную текстовую статистику с ASCII-графиками."""
-    cache = _get_cache()
-    total_users = sum(1 for k in cache if k != "__settings__")
+    """Генерирует сводную статистику пользователей с ASCII-графиками."""
+    cache = execute_query("SELECT user_id, joined_at, username, first_name, last_name, invited_by FROM users;", fetch="all")
+    total_users = len(cache)
     
     now = get_mgn_now().replace(tzinfo=None)
     today_start = datetime(now.year, now.month, now.day)
@@ -377,23 +622,20 @@ def get_admin_stats() -> str:
     week_count = 0
     month_count = 0
     
-    # Реферальная статистика
     referral_counts = {}
     invited_total = 0
     
-    for user_id, info in cache.items():
-        if user_id == "__settings__":
-            continue
-        joined_str = None
-        if isinstance(info, dict):
-            joined_str = info.get("joined_at")
-            ref_id = info.get("invited_by")
-            if ref_id:
-                invited_total += 1
-                ref_id_str = str(ref_id)
-                referral_counts[ref_id_str] = referral_counts.get(ref_id_str, 0) + 1
+    for row in cache:
+        uid, joined_at, username, first_name, last_name, invited_by = row
+        
+        if invited_by:
+            invited_total += 1
+            ref_id_str = str(invited_by)
+            referral_counts[ref_id_str] = referral_counts.get(ref_id_str, 0) + 1
             
-        dt = _parse_datetime(joined_str)
+        dt = joined_at
+        if isinstance(dt, str):
+            dt = _parse_datetime(dt)
         if dt:
             if dt >= today_start:
                 today_count += 1
@@ -416,12 +658,10 @@ def get_admin_stats() -> str:
     top_referrers = sorted(referral_counts.items(), key=lambda x: x[1], reverse=True)[:3]
     top_lines = []
     for idx, (ref_id_str, count) in enumerate(top_referrers, 1):
-        ref_info = cache.get(ref_id_str)
-        if isinstance(ref_info, dict):
-            first = ref_info.get("first_name") or ""
-            last = ref_info.get("last_name") or ""
-            name = f"{first} {last}".strip() or "Пользователь"
-            username = ref_info.get("username")
+        ref_info = execute_query("SELECT first_name, last_name, username FROM users WHERE user_id = %s;", (int(ref_id_str),), fetch="one")
+        if ref_info:
+            first, last, username = ref_info
+            name = f"{first or ''} {last or ''}".strip() or "Пользователь"
             user_str = f"{name} (@{username})" if username else name
         else:
             user_str = f"ID {ref_id_str}"
@@ -445,11 +685,14 @@ def get_admin_stats() -> str:
         
     return "\n".join(lines)
 
+# -----------------------------------------------------------------------------
+# Генерация Excel Отчета
+# -----------------------------------------------------------------------------
 
 def generate_users_report() -> str:
-    """Генерирует красивый Excel-отчет о пользователях и активности."""
-    cache = _get_cache()
-    total_users = sum(1 for k in cache if k != "__settings__")
+    """Генерирует многостраничный Excel-отчет о пользователях и активности."""
+    cache = execute_query("SELECT user_id, group_name, username, first_name, last_name, interface, joined_at, last_seen, invited_by FROM users;", fetch="all")
+    total_users = len(cache)
     
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
@@ -457,16 +700,14 @@ def generate_users_report() -> str:
     
     wb = Workbook()
     
-    # -------------------------------------------------------------
     # Стили
-    # -------------------------------------------------------------
     font_title = Font(name="Calibri", size=16, bold=True, color="1F497D")
     font_header = Font(name="Calibri", size=11, bold=True, color="FFFFFF")
     font_data = Font(name="Calibri", size=11)
     font_bold = Font(name="Calibri", size=11, bold=True)
     
-    fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid") # Темно-синий
-    fill_zebra = PatternFill(start_color="F2F5F8", end_color="F2F5F8", fill_type="solid") # Светлый серо-синий
+    fill_header = PatternFill(start_color="1F497D", end_color="1F497D", fill_type="solid")
+    fill_zebra = PatternFill(start_color="F2F5F8", end_color="F2F5F8", fill_type="solid")
     
     align_center = Alignment(horizontal="center", vertical="center")
     align_left = Alignment(horizontal="left", vertical="center")
@@ -518,32 +759,32 @@ def generate_users_report() -> str:
         cell.alignment = align_center
         cell.border = header_border
         
+    def format_dt(dt):
+        if not dt:
+            return "-"
+        if isinstance(dt, datetime):
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
+        return str(dt)
+
     row_num = 5
-    for uid_str, info in cache.items():
-        if uid_str == "__settings__":
-            continue
-        group = ""
-        username = ""
-        name = "Пользователь"
-        joined = "-"
-        last_seen = "-"
-        invited_by = "-"
-        referrals_count = get_referred_users_count(int(uid_str))
+    for row in cache:
+        uid, group, username, first_name, last_name, interface, j_at, l_seen, invited_by = row
         
-        if isinstance(info, dict):
-            group = info.get("group") or ""
-            username = f"@{info.get('username')}" if info.get("username") else "-"
-            first = info.get("first_name") or ""
-            last = info.get("last_name") or ""
-            if first or last:
-                name = f"{first} {last}".strip()
-            joined = info.get("joined_at") or "-"
-            last_seen = info.get("last_seen") or "-"
-            invited_by = str(info.get("invited_by")) if info.get("invited_by") else "-"
-        else:
-            group = info or ""
-            
-        row_data = [uid_str, group, username, name, joined, last_seen, invited_by, referrals_count]
+        name = f"{first_name or ''} {last_name or ''}".strip() or "Пользователь"
+        username_str = f"@{username}" if username else "-"
+        invited_str = str(invited_by) if invited_by else "-"
+        referrals_count = get_referred_users_count(uid)
+        
+        row_data = [
+            str(uid), 
+            group or "", 
+            username_str, 
+            name, 
+            format_dt(j_at), 
+            format_dt(l_seen), 
+            invited_str, 
+            referrals_count
+        ]
         
         ws1.row_dimensions[row_num].height = 20
         is_even = (row_num % 2 == 0)
@@ -584,54 +825,42 @@ def generate_users_report() -> str:
     title_cell2.alignment = align_left
     ws2.row_dimensions[1].height = 40
     
-    # Считаем данные из логов
-    dau = 0
-    wau = 0
-    total_today = 0
-    total_week = 0
+    now = get_mgn_now().replace(tzinfo=None)
+    today_start = datetime(now.year, now.month, now.day)
+    seven_days_ago = today_start - timedelta(days=7)
+    
+    if USE_POSTGRES:
+        logs = execute_query("SELECT user_id, time, action FROM activity_log WHERE time >= %s;", (seven_days_ago,), fetch="all")
+        total_today_res = execute_query("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM activity_log WHERE time >= %s;", (today_start,), fetch="one")
+        total_today, dau = total_today_res if total_today_res else (0, 0)
+    else:
+        logs = execute_query("SELECT user_id, time, action FROM activity_log WHERE time >= %s;", (seven_days_ago.strftime("%Y-%m-%d %H:%M:%S"),), fetch="all")
+        total_today_res = execute_query("SELECT COUNT(*), COUNT(DISTINCT user_id) FROM activity_log WHERE time >= %s;", (today_start.strftime("%Y-%m-%d %H:%M:%S"),), fetch="one")
+        total_today, dau = total_today_res if total_today_res else (0, 0)
+        
+    total_week = len(logs) if logs else 0
+    active_users_week = set()
     hourly_distribution = [0] * 24
     command_counts = {}
     
-    if os.path.exists(ACTIVITY_LOG_FILE):
-        now = get_mgn_now().replace(tzinfo=None)
-        today_start = datetime(now.year, now.month, now.day)
-        seven_days_ago = today_start - timedelta(days=7)
-        
-        active_users_today = set()
-        active_users_week = set()
-        
-        try:
-            with open(ACTIVITY_LOG_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                        dt = datetime.strptime(entry["time"], "%Y-%m-%d %H:%M:%S")
-                        uid = entry["user_id"]
-                        action = entry["action"]
-                        
-                        if dt >= seven_days_ago:
-                            total_week += 1
-                            active_users_week.add(uid)
-                            
-                            cmd = action.split()[0] if action else "unknown"
-                            if cmd.startswith("cb:"):
-                                cmd = "кнопка: " + cmd.split(":")[1].split()[0]
-                            command_counts[cmd] = command_counts.get(cmd, 0) + 1
-                            hourly_distribution[dt.hour] += 1
-                            
-                        if dt >= today_start:
-                            total_today += 1
-                            active_users_today.add(uid)
-                    except Exception:
-                        continue
-            dau = len(active_users_today)
-            wau = len(active_users_week)
-        except Exception:
-            pass
+    if logs:
+        for row in logs:
+            uid, time_val, action = row
+            active_users_week.add(uid)
             
+            dt = time_val
+            if isinstance(dt, str):
+                dt = datetime.strptime(dt, "%Y-%m-%d %H:%M:%S")
+                
+            hourly_distribution[dt.hour] += 1
+            
+            cmd = action.split()[0] if action else "unknown"
+            if cmd.startswith("cb:"):
+                cmd = "кнопка: " + cmd.split(":")[1].split()[0]
+            command_counts[cmd] = command_counts.get(cmd, 0) + 1
+            
+    wau = len(active_users_week)
+    
     # Записываем общие метрики
     ws2.cell(row=3, column=1, value="Метрика").font = font_bold
     ws2.cell(row=3, column=2, value="Значение").font = font_bold
@@ -708,55 +937,37 @@ def generate_users_report() -> str:
         cell.alignment = align_center
         cell.border = header_border
         
-    log_rows = []
-    if os.path.exists(ACTIVITY_LOG_FILE):
-        try:
-            with open(ACTIVITY_LOG_FILE, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    try:
-                        entry = json.loads(line)
-                        log_rows.append(entry)
-                    except Exception:
-                        continue
-            log_rows = log_rows[-1000:]
-            log_rows.reverse()
-        except Exception:
-            pass
+    # Достаем последние 1000 записей из activity_log
+    log_rows = execute_query("SELECT user_id, time, action FROM activity_log ORDER BY id DESC LIMIT 1000;", fetch="all")
+    
+    if log_rows:
+        for idx, entry in enumerate(log_rows, 4):
+            uid, time_val, act = entry
+            t_str = format_dt(time_val)
             
-    for idx, entry in enumerate(log_rows, 4):
-        uid = entry.get("user_id")
-        t_str = entry.get("time")
-        act = entry.get("action")
-        
-        u_info = cache.get(str(uid))
-        u_desc = ""
-        if isinstance(u_info, dict):
-            first = u_info.get("first_name") or ""
-            last = u_info.get("last_name") or ""
-            grp = u_info.get("group") or ""
-            name = f"{first} {last}".strip() or "Пользователь"
-            u_desc = f"{name} ({grp})" if grp else name
-        elif isinstance(u_info, str):
-            u_desc = f"Группа: {u_info}"
-        else:
-            u_desc = "Новый/Неизвестный"
+            # Получаем информацию о пользователе из кэша / бд
+            u_info = execute_query("SELECT first_name, last_name, group_name FROM users WHERE user_id = %s;", (uid,), fetch="one")
+            u_desc = ""
+            if u_info:
+                first, last, grp = u_info
+                name = f"{first or ''} {last or ''}".strip() or "Пользователь"
+                u_desc = f"{name} ({grp})" if grp else name
+            else:
+                u_desc = f"ID: {uid}"
+                
+            row_data = [t_str, str(uid), u_desc, act]
+            ws3.row_dimensions[idx].height = 18
+            is_even = (idx % 2 == 0)
             
-        row_data = [t_str, str(uid), u_desc, act]
-        ws3.row_dimensions[idx].height = 18
-        is_even = (idx % 2 == 0)
-        
-        for col_num, val in enumerate(row_data, 1):
-            cell = ws3.cell(row=idx, column=col_num)
-            cell.value = val
-            cell.font = font_data
-            cell.border = cell_border
-            if is_even:
-                cell.fill = fill_zebra
-            if col_num in [1, 2]:
-                cell.alignment = align_center
+            for col_num, val in enumerate(row_data, 1):
+                cell = ws3.cell(row=idx, column=col_num)
+                cell.value = val
+                cell.font = font_data
+                cell.border = cell_border
+                if is_even:
+                    cell.fill = fill_zebra
+                if col_num in [1, 2]:
+                    cell.alignment = align_center
                 
     ws3.column_dimensions["A"].width = 20
     ws3.column_dimensions["B"].width = 16
@@ -766,215 +977,3 @@ def generate_users_report() -> str:
     filepath = os.path.join(tempfile.gettempdir(), "users_report.xlsx")
     wb.save(filepath)
     return filepath
-
-
-def log_activity(user_id: int, action: str):
-    """Логирует действие пользователя в activity.log."""
-    now_str = get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S")
-    log_entry = {
-        "user_id": user_id,
-        "time": now_str,
-        "action": action
-    }
-    try:
-        with open(ACTIVITY_LOG_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(log_entry, ensure_ascii=False) + "\n")
-    except Exception as e:
-        print(f"❌ Ошибка при логировании активности: {e}")
-
-
-def get_activity_stats() -> str:
-    """Анализирует лог активности и формирует сводку с гистограммой по часам за последние 7 дней."""
-    if not os.path.exists(ACTIVITY_LOG_FILE):
-        return "📊 *Статистика активности:* Нет логов активности."
-
-    now = get_mgn_now().replace(tzinfo=None)
-    today_start = datetime(now.year, now.month, now.day)
-    seven_days_ago = today_start - timedelta(days=7)
-
-    total_today = 0
-    total_week = 0
-    active_users_today = set()
-    active_users_week = set()
-
-    hourly_distribution = [0] * 24
-    command_counts = {}
-
-    try:
-        with open(ACTIVITY_LOG_FILE, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    entry = json.loads(line)
-                    dt = datetime.strptime(entry["time"], "%Y-%m-%d %H:%M:%S")
-                    uid = entry["user_id"]
-                    action = entry["action"]
-
-                    if dt >= seven_days_ago:
-                        total_week += 1
-                        active_users_week.add(uid)
-
-                        # Группируем популярные действия
-                        cmd = action.split()[0] if action else "unknown"
-                        if cmd.startswith("cb:"):
-                            cmd = "кнопка: " + cmd.split(":")[1].split()[0]
-                        command_counts[cmd] = command_counts.get(cmd, 0) + 1
-
-                    if dt >= today_start:
-                        total_today += 1
-                        active_users_today.add(uid)
-
-                    if dt >= seven_days_ago:
-                        hourly_distribution[dt.hour] += 1
-                except Exception:
-                    continue
-    except Exception as e:
-        return f"❌ Ошибка при чтении логов: {e}"
-
-    dau = len(active_users_today)
-    wau = len(active_users_week)
-
-    # Топ команд
-    top_commands = sorted(command_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-    commands_str = "\n".join(f"  • `{cmd}`: *{count}* раз" for cmd, count in top_commands)
-
-    # Гистограмма активности
-    max_hour_val = max(hourly_distribution) if max(hourly_distribution) > 0 else 1
-    chart_lines = []
-    for h in range(24):
-        val = hourly_distribution[h]
-        if val > 0 or (7 <= h <= 22):
-            filled = int((val / max_hour_val) * 10)
-            bar = "█" * filled + "░" * (10 - filled)
-            chart_lines.append(f"`{h:02d}:00` `[{bar}]` *{val}* запр.")
-
-    peak_hours = sorted(range(24), key=lambda h: hourly_distribution[h], reverse=True)[:5]
-    peak_hours_str = ", ".join(f"{h:02d}:00" for h in peak_hours if hourly_distribution[h] > 0)
-
-    lines = [
-        "📊 *Анализ активности пользователей:*",
-        f"👥 Активно сегодня (DAU): *{dau}* чел. ({total_today} запр.)",
-        f"👥 Активно за 7 дней (WAU): *{wau}* чел. ({total_week} запр.)",
-        f"🔥 Пиковое время: *{peak_hours_str or 'нет данных'}*",
-        "",
-        "🔝 *Популярные функции (за 7 дней):*",
-        commands_str or "  • Нет данных",
-        "",
-        "🕒 *Активность по часам (за 7 дней):*",
-        *chart_lines
-    ]
-    return "\n".join(lines)
-
-
-def get_referred_users_count(user_id: int) -> int:
-    """Подсчитывает количество пользователей, приглашенных этим пользователем."""
-    cache = _get_cache()
-    count = 0
-    for uid_str, info in cache.items():
-        if uid_str == "__settings__":
-            continue
-        if isinstance(info, dict) and info.get("invited_by") == user_id:
-            count += 1
-    return count
-
-
-def is_promo_dismissed(user_id: int, promo_id: str) -> bool:
-    """Проверяет, скрыл ли пользователь промо навсегда."""
-    cache = _get_cache()
-    info = cache.get(str(user_id))
-    if isinstance(info, dict):
-        promos = info.get("promos", {})
-        promo_info = promos.get(promo_id)
-        if isinstance(promo_info, dict):
-            return promo_info.get("dismissed", False)
-        elif isinstance(promo_info, bool):
-            return promo_info
-    return False
-
-
-def dismiss_promo(user_id: int, promo_id: str):
-    """Скрывает промо-сообщение для пользователя навсегда."""
-    cache = _get_cache()
-    uid_str = str(user_id)
-    info = cache.get(uid_str)
-
-    if not isinstance(info, dict):
-        info = {
-            "group": info if isinstance(info, str) else None,
-            "joined_at": get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-            "last_seen": get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-            "username": None,
-            "first_name": None,
-            "last_name": None
-        }
-
-    if "promos" not in info:
-        info["promos"] = {}
-
-    promo_info = info["promos"].get(promo_id)
-    if not isinstance(promo_info, dict):
-        promo_info = {"dismissed": True, "last_shown_at": None}
-    else:
-        promo_info["dismissed"] = True
-
-    info["promos"][promo_id] = promo_info
-    cache[uid_str] = info
-    _save(cache)
-
-
-def can_show_promo_today(user_id: int, promo_id: str) -> bool:
-    """Проверяет, можно ли показать пользователю промо сегодня."""
-    cache = _get_cache()
-    info = cache.get(str(user_id))
-    if not isinstance(info, dict):
-        return True
-
-    promos = info.get("promos", {})
-    promo_info = promos.get(promo_id)
-    if not promo_info:
-        return True
-
-    if isinstance(promo_info, bool):
-        return not promo_info
-
-    if promo_info.get("dismissed", False):
-        return False
-
-    last_shown = promo_info.get("last_shown_at")
-    if not last_shown:
-        return True
-
-    today_str = get_mgn_today().isoformat()
-    return last_shown != today_str
-
-
-def record_promo_show(user_id: int, promo_id: str):
-    """Сохраняет текущую дату как дату последнего показа промо."""
-    cache = _get_cache()
-    uid_str = str(user_id)
-    info = cache.get(uid_str)
-
-    if not isinstance(info, dict):
-        info = {
-            "group": info if isinstance(info, str) else None,
-            "joined_at": get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-            "last_seen": get_mgn_now().replace(tzinfo=None).strftime("%Y-%m-%d %H:%M:%S"),
-            "username": None,
-            "first_name": None,
-            "last_name": None
-        }
-
-    if "promos" not in info:
-        info["promos"] = {}
-
-    promo_info = info["promos"].get(promo_id)
-    if not isinstance(promo_info, dict):
-        dismissed = promo_info if isinstance(promo_info, bool) else False
-        promo_info = {"dismissed": dismissed}
-
-    promo_info["last_shown_at"] = get_mgn_today().isoformat()
-    info["promos"][promo_id] = promo_info
-    cache[uid_str] = info
-    _save(cache)
