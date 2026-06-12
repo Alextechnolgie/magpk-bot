@@ -1,0 +1,10 @@
+{
+  "domain": "magpk_schedule",
+  "name": "MAGPK Schedule",
+  "version": "1.0.0",
+  "config_flow": true,
+  "documentation": "https://github.com/alextechnolgie/magpk-bot",
+  "requirements": ["beautifulsoup4==4.12.3"],
+  "codeowners": ["@alextechnolgie"],
+  "iot_class": "cloud_polling"
+}
