@@ -41,6 +41,7 @@ class MagpkScheduleCoordinator(DataUpdateCoordinator[dict[str, any]]):
     def __init__(self, hass: HomeAssistant, group: str) -> None:
         """Initialize the coordinator."""
         self.group = group
+        self._cache: dict[str, tuple[float, list[dict] | None]] = {}  # Cache date_iso -> (timestamp, lessons)
         super().__init__(
             hass,
             LOGGER,
@@ -54,29 +55,48 @@ class MagpkScheduleCoordinator(DataUpdateCoordinator[dict[str, any]]):
         return datetime.now(tz)
 
     async def _async_update_data(self) -> dict[str, any]:
-        """Fetch schedule data for today and tomorrow from magpk.ru."""
+        """Fetch schedule data for the next 7 days from magpk.ru."""
         mgn_now = self._get_mgn_now()
         today = mgn_now.date()
-        tomorrow = today + timedelta(days=1)
+        
+        data = {}
+        import time
+        now_ts = time.time()
 
-        try:
-            today_lessons = await self._fetch_lessons_for_date(today)
-            tomorrow_lessons = await self._fetch_lessons_for_date(tomorrow)
+        for i in range(7):
+            target_date = today + timedelta(days=i)
+            date_iso = target_date.isoformat()
 
-            return {
-                "today": {
-                    "date": today.strftime("%d.%m.%Y"),
-                    "day_name": WEEKDAYS_RU[today.weekday()],
-                    "lessons": today_lessons,
-                },
-                "tomorrow": {
-                    "date": tomorrow.strftime("%d.%m.%Y"),
-                    "day_name": WEEKDAYS_RU[tomorrow.weekday()],
-                    "lessons": tomorrow_lessons,
-                },
+            # Check cache (1 hour TTL)
+            cached_entry = self._cache.get(date_iso)
+            if cached_entry and (now_ts - cached_entry[0] < 3600):
+                lessons = cached_entry[1]
+                LOGGER.info("Using cached lessons for %s: %s", date_iso, len(lessons) if lessons else 0)
+            else:
+                try:
+                    lessons = await self._fetch_lessons_for_date(target_date)
+                    self._cache[date_iso] = (now_ts, lessons)
+                except Exception as e:
+                    LOGGER.warning("Error fetching schedule for %s: %s", date_iso, e)
+                    # Use expired cache if network fails, otherwise None
+                    lessons = cached_entry[1] if cached_entry else None
+
+            day_key = f"day_{i}"
+            data[day_key] = {
+                "date": target_date.strftime("%d.%m.%Y"),
+                "day_name": WEEKDAYS_RU[target_date.weekday()],
+                "lessons": lessons,
             }
-        except Exception as err:
-            raise UpdateFailed(f"Error communicating with MAGPK website: {err}") from err
+
+        # Cleanup old cache entries
+        if len(self._cache) > 30:
+            active_dates = {(today + timedelta(days=d)).isoformat() for d in range(7)}
+            for k in list(self._cache.keys()):
+                if k not in active_dates:
+                    del self._cache[k]
+
+        return data
+
 
     async def _fetch_lessons_for_date(self, target_date: datetime.date) -> list[dict] | None:
         """Fetch lessons for a specific date."""

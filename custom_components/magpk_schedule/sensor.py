@@ -26,6 +26,7 @@ async def async_setup_entry(
         [
             MagpkScheduleTodaySensor(coordinator),
             MagpkScheduleTomorrowSensor(coordinator),
+            MagpkScheduleWeekSensor(coordinator),
         ]
     )
 
@@ -122,6 +123,53 @@ def format_schedule_for_text(lessons: list[dict] | None) -> str:
     return "\n".join(lines)
 
 
+def format_schedule_for_markdown_week(data: dict[str, Any] | None) -> str:
+    """Format 7 days of schedule into a beautiful markdown string for Home Assistant dashboard."""
+    if not data:
+        return "Нет данных."
+
+    lines = []
+    for i in range(7):
+        day_info = data.get(f"day_{i}")
+        if not day_info:
+            continue
+
+        date_str = day_info.get("date")
+        day_name = day_info.get("day_name")
+        lessons = day_info.get("lessons")
+
+        # Display date format compact: e.g. "Понедельник (15.06)"
+        display_date = date_str[:-5] if date_str and len(date_str) > 5 else date_str
+        lines.append(f"### {day_name} ({display_date})")
+
+        if lessons is None:
+            lines.append("*Нет данных (расписание не опубликовано)*")
+        elif not lessons:
+            lines.append("*Занятий нет*")
+        else:
+            for lesson in lessons:
+                num = lesson.get("pair_num", "")
+                time_str = lesson.get("time", "")
+                subject = lesson.get("subject", "")
+                teacher = lesson.get("teacher", "")
+                room = lesson.get("room", "")
+
+                details = []
+                if teacher:
+                    parts = teacher.split()
+                    abbrev = f"{parts[0]} {parts[1][0]}.{parts[2][0]}." if len(parts) >= 3 else teacher
+                    details.append(abbrev)
+                if room:
+                    details.append(room)
+
+                details_str = f" • *{', '.join(details)}*" if details else ""
+                lines.append(f"- **{num}** ({time_str}): {subject}{details_str}")
+
+        lines.append("")  # Spacer between days
+
+    return "\n".join(lines).strip()
+
+
 class MagpkScheduleBaseSensor(CoordinatorEntity[MagpkScheduleCoordinator], SensorEntity):
     """Base class for MAGPK Schedule sensors."""
 
@@ -144,7 +192,15 @@ class MagpkScheduleBaseSensor(CoordinatorEntity[MagpkScheduleCoordinator], Senso
         """Retrieve target schedule data from coordinator."""
         if not self.coordinator.data:
             return None
-        return self.coordinator.data.get(self.schedule_type)
+            
+        # Map today/tomorrow to day_0/day_1
+        key = self.schedule_type
+        if key == "today":
+            key = "day_0"
+        elif key == "tomorrow":
+            key = "day_1"
+            
+        return self.coordinator.data.get(key)
 
     @property
     def native_value(self) -> str:
@@ -209,3 +265,55 @@ class MagpkScheduleTomorrowSensor(MagpkScheduleBaseSensor):
     def __init__(self, coordinator: MagpkScheduleCoordinator) -> None:
         """Initialize the tomorrow sensor."""
         super().__init__(coordinator, "tomorrow")
+
+
+class MagpkScheduleWeekSensor(CoordinatorEntity[MagpkScheduleCoordinator], SensorEntity):
+    """Sensor for MAGPK Schedule for the week ahead."""
+
+    _attr_has_entity_name = True
+    _attr_icon = "mdi:calendar-multiselect"
+
+    def __init__(self, coordinator: MagpkScheduleCoordinator) -> None:
+        """Initialize the sensor."""
+        super().__init__(coordinator)
+        group = coordinator.group
+        self._attr_unique_id = f"magpk_schedule_{group}_week"
+        self._attr_name = "Расписание на неделю"
+
+    @property
+    def native_value(self) -> str:
+        """Return the state of the sensor (days with lessons)."""
+        data = self.coordinator.data
+        if not data:
+            return "Нет данных"
+
+        days_with_lessons = 0
+        for i in range(7):
+            day_info = data.get(f"day_{i}")
+            if day_info and day_info.get("lessons"):
+                days_with_lessons += 1
+
+        # Select Russian plural form for "день"
+        if days_with_lessons == 1:
+            suffix = "день с парами"
+        elif 2 <= days_with_lessons <= 4:
+            suffix = "дня с парами"
+        else:
+            suffix = "дней с парами"
+
+        return f"{days_with_lessons} {suffix}"
+
+    @property
+    def extra_state_attributes(self) -> dict[str, Any]:
+        """Return the state attributes."""
+        data = self.coordinator.data
+        if not data:
+            return {
+                "group_name": self.coordinator.group,
+                "schedule_markdown": "Нет данных",
+            }
+
+        return {
+            "group_name": self.coordinator.group,
+            "schedule_markdown": format_schedule_for_markdown_week(data),
+        }
